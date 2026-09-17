@@ -33,7 +33,7 @@ Never commit `.env`, `data/`, `session/` (already gitignored).
 Paste the ticket's "Prompt for your agent" block. Rules for the agent, always:
 - Work only in the files the ticket lists.
 - Never modify `tests/`.
-- Do not add dependencies not in `requirements.txt` without asking.
+- Do not add dependencies not in `requirements.txt` without asking. **Never run `uv init`, `uv add` or create `pyproject.toml` / `uv.lock` / `.python-version`** — the repo uses `requirements.txt` only; these files break CI.
 - Run `uv run pytest -q` before saying it is done.
 Read the diff yourself before committing — you are responsible for it, not the agent.
 

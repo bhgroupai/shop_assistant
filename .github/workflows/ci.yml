@@ -30,6 +30,9 @@ jobs:
       - name: Summary
         if: always()
         run: |
+          if [ ! -f pytest.xml ]; then
+            echo "## ❌ pytest did not run — the environment failed before tests started. Open the 'pytest' step above." >> "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
           {
             echo "## pytest"
             python3 - <<'PY'
