@@ -18,7 +18,7 @@ Never commit `.env`, `data/`, `session/` (already gitignored).
 
 ## 1. Pick up
 - Board → "Do Next" view → filter by your Owner. Take the lowest `Order` that is `To Do` and whose "Needs" tickets are `Done`. Set `Status = In Progress`.
-- The branch already exists: `git fetch && git switch t<Order>-<name>` (e.g. `t7-find-products`). It contains the ticket's tests and nothing else.
+- When the ticket is set to In Progress, Sanjarbek creates the branch from the current `main` and adds the tests. Then: `git fetch && git switch t<Order>-<name>` (e.g. `t7-find-products`). It contains the ticket's tests and nothing else. A ticket goes to In Progress only when the tickets it needs are Done, so the branch is fresh and you never need to rebase.
 - Run them: `uv run pytest tests/<file the ticket names> -q` → **red**, every failure is `NotImplementedError("ticket #N")`. That is your starting point. If you see any other error, stop and tell Sanjarbek.
 - Tickets without tests (#3, #11, #15) — create the branch yourself with the same naming.
 
