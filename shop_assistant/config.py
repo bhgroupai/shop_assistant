@@ -17,6 +17,7 @@ EMBED_BATCH = 128          # NFR-3
 MODEL = "gemma4:31b"            # Ollama, tool calling (SDD §1.1)
 MAX_ITERATIONS = 8
 MAX_TOKENS = 1024
+EXTRACT_MAX_TOKENS = 4096     # gemma4 thinks before the tool call; 10 products per call (spike #3)
 EMBED_MODEL = "bge-m3"           # Ollama, multilingual embeddings, 1024-d
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
