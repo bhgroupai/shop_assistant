@@ -13,7 +13,7 @@ def embed(texts: list[str]):
 
 
 def reindex() -> int:
-    """Rewrite embeddings.npy + embeddings_ids.json for all products (D-4). Returns N."""
+    """Rewrite embeddings.npy + embeddings_ids.json for all products (D-4). Embeds normalise(product_text(p)) — D-3. Returns N."""
     raise NotImplementedError("ticket #6")
 
 

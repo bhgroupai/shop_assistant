@@ -26,7 +26,7 @@ def latest_posts(n: int = 5, products: list[Product] | None = None) -> list[Prod
 
 
 def semantic_search(text: str, max_price: int | None = None, limit: int = 5) -> list[Product]:
-    """Ollama query embedding (index.embed), cosine over the matrix, then price filter, top-k (FR-10)."""
+    """index.embed([normalise(text)]) — D-3 —, cosine over the matrix, then price filter, top-k (FR-10)."""
     raise NotImplementedError("ticket #8")
 
 

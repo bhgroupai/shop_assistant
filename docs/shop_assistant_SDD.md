@@ -1,6 +1,6 @@
 # Software Design Description — Shop Assistant
 
-Version 0.4 · 2026-09-17 · Status: draft · Implements: shop_assistant_SRS.md v0.4
+Version 0.5 · 2026-09-17 · Status: draft · Implements: shop_assistant_SRS.md v0.4
 
 ## 1. Overview
 
@@ -87,11 +87,12 @@ FAQ entries are embedded too (separate `faq_embeddings.npy`), so `search_faq` is
 ### 3.2 `extract.py` — FR-3a, FR-3b, FR-4
 - `strip_footer(caption) -> body`: drop lines matching phone / `@handle` / `📍` / delivery boilerplate; strip emoji.
 - `extract(body) -> Product` — one LLM call (Ollama, `config.MODEL`) with a JSON schema (tool-use with a single `record_product` tool, forced) so the output is always valid. Prompt gives the fixed category list, price notation examples (`980.000ming` → 980000), and asks for keywords in uz-Latin, uz-Cyrillic, ru, en.
-- Batches of 10 posts per call to keep NFR-3.
+- Batches of 10 posts per call to keep NFR-3. `max_tokens ≥ 1000`: `gemma4:31b` emits a `thinking` block before the `tool_use` block; with 200 tokens the call is cut off before the tool call (spike #3).
 - CLI: `python -m shop_assistant.extract` processes posts not yet in `products.jsonl`.
 
 ### 3.3 `index.py` — FR-5, FR-6
 - `embed(texts: list[str]) -> np.ndarray` — Ollama `/api/embed` with `config.EMBED_MODEL`, batches of `config.EMBED_BATCH`; `bge-m3` needs no query/document prefix.
+- **Embed the normalised text**: `embed([normalise(product_text(p)) …])`. Spike #3 measured `bge-m3` cross-script raw at 0.62–0.67 (`krossovka`/`кроссовка`) but 0.87 after transliteration — so D-3 applies to embeddings too, not only to keywords.
 - Embeds `name + " " + body + " " + " ".join(keywords)` per product; rewrites `embeddings.npy` / `embeddings_ids.json` for all products (cheap at this size; simpler than patching rows).
 - Same for `faq.jsonl` → `faq_embeddings.npy`.
 - CLI: `python -m shop_assistant.index`.
@@ -103,7 +104,7 @@ FAQ entries are embedded too (separate `faq_embeddings.npy`), so `search_faq` is
 ### 3.5 `search.py` — FR-8, FR-10, FR-11, FR-12
 ```python
 def find_products(category=None, min_price=None, max_price=None, size=None, color=None, keywords=None, limit=5) -> list[Product]
-def semantic_search(text, max_price=None, limit=5) -> list[Product]     # Ollama query embedding, cosine, then price filter
+def semantic_search(text, max_price=None, limit=5) -> list[Product]     # embed(normalise(text)), cosine, then price filter
 def latest_posts(n=5) -> list[Product]
 def search_faq(text, limit=3) -> list[FaqEntry]
 ```
@@ -147,7 +148,7 @@ Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service:
 |---|---|---|---|
 | D-1 | Filters first, embeddings as fallback | embeddings only | numbers (size 42, ≤ 200k) embed badly; also the teaching point of the project |
 | D-2 | Structured extraction with forced tool-use JSON | regex on captions | template drifts; the LLM handles "980.000ming", "Telegram obunachilariga narx", missing lines |
-| D-3 | Normalise scripts at index *and* query time | fuzzy matching at query time | one cheap deterministic function, testable in isolation |
+| D-3 | Normalise scripts at index *and* query time — for keywords **and** for the text that gets embedded | fuzzy matching at query time; raw-text embeddings | one cheap deterministic function, testable in isolation; spike #3: `bge-m3` cross-script similarity 0.62 raw → 0.87 normalised |
 | D-4 | Rewrite the whole embedding matrix on index | patch rows | N is small; correctness over cleverness |
 | D-5 | Owner replies via Telegram "reply to" the escalation message | inline buttons / commands | zero UI to build; the quoted `#esc <id>` header carries the routing |
 | D-6 | Conversation history in memory only | persist per customer | NFR-4 privacy; restart loses only the current chat context |
@@ -205,4 +206,5 @@ shop_assistant/                   # repo root; run everything from here
 | 0.1 | 2026-09-16 | Initial design against SRS v0.3 |
 | 0.2 | 2026-09-16 | §5: code lives in a `shop_assistant/` package (so `python -m shop_assistant.x` works from repo root); `models.py` holds Post/Product/FaqEntry; scaffolding for tickets 1–15 |
 | 0.3 | 2026-09-17 | §5: tests per ticket live on the ticket branch (senior-written), `main` keeps only merged tests; CI added |
+| 0.5 | 2026-09-17 | Spike #3 results: embed normalised text (§3.3, §3.5, D-3); `max_tokens ≥ 1000` for extraction (§3.2) |
 | 0.4 | 2026-09-17 | SRS C-2 v0.4: Claude + Voyage replaced by Ollama on the Codeschool GPU server (`gemma4:31b`, `bge-m3`); §1.1, §3.2, §3.3, §3.7, §3.9, §7 updated; deploy target = Codeschool |
