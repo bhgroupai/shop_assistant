@@ -3,7 +3,7 @@ import asyncio
 import json
 from dataclasses import asdict
 
-from telethon.sync import TelegramClient
+from telethon import TelegramClient
 
 from shop_assistant import config
 from shop_assistant.models import Post
@@ -37,7 +37,7 @@ async def _fetch(channel: str, min_id: int, limit: int) -> list[Post]:
             if message.text and message.text.strip():
                 posts.append(Post(
                     id=message.id,
-                    date=message.date.isoformat(),
+                    date=message.date.replace(tzinfo=None).isoformat(),
                     link=f"https://t.me/{channel}/{message.id}",
                     caption=message.text,
                     has_media=bool(message.media)
