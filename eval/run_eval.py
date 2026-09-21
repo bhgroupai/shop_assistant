@@ -31,9 +31,10 @@ def _candidate_numbers(answer: str) -> set[int]:
     return {p for p in prices if p >= 1000} | sizes
 
 
-def contains_invented_numbers(answer: str, products: list) -> bool:
-    """True when the reply states a price or size not present in the referenced records (AC-3, FR-15)."""
-    allowed: set[int] = set()
+def contains_invented_numbers(answer: str, products: list, question: str = "") -> bool:
+    """True when the reply states a price or size not present in the referenced records (AC-3, FR-15).
+    Numbers the customer wrote in `question` are allowed (echoing "iPhone 15" is not inventing)."""
+    allowed: set[int] = set(_candidate_numbers(question)) if question else set()
     for p in products:
         allowed.update(v for v in (p.price, p.subscriber_price) if v is not None)
         allowed.update(int(s) for s in p.sizes if s.isdigit())
@@ -201,7 +202,7 @@ def main(dry: bool = False, questions_path=None) -> None:
         expected_ids = set(expected.get("posts", []))
         r = {
             "q": q, "expected": expected, "posts": posts, "escalated": escalated,
-            "invented": contains_invented_numbers(answer, [by_id[i] for i in posts if i in by_id]),
+            "invented": contains_invented_numbers(answer, [by_id[i] for i in posts if i in by_id], q),
             "semantic_only": capture.filter_empty() and bool(expected_ids & capture.ids("semantic_search_tool")),
             "ms": ms, "answer": answer,
         }
