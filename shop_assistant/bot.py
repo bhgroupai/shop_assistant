@@ -1,5 +1,6 @@
 """Telethon bot: customer handler, escalation, owner relay, logging. SDD §3.8. Tickets #13, #14."""
 import asyncio
+import io
 import json
 import logging
 import re
@@ -191,18 +192,23 @@ _captions: dict[int, str] = {}
 
 
 async def _placeholder(client):
-    """The channel's profile photo for posts without a photo/video: downloaded once as bytes
-    (bots may not list profile photos), then replaced by the uploaded Photo after the first send."""
+    """The channel's profile photo for posts without a photo/video. Bots may not list profile
+    photos, so it is downloaded once as bytes; a named buffer makes Telegram treat it as a photo.
+    After the first send the uploaded Photo replaces it (no re-upload)."""
     global _placeholder_media
     if _placeholder_media is None:
         _placeholder_media = await client.download_profile_photo(config.CHANNEL, file=bytes) or None
+    if isinstance(_placeholder_media, (bytes, bytearray)):
+        buf = io.BytesIO(_placeholder_media)
+        buf.name = "logo.jpg"
+        return buf
     return _placeholder_media
 
 
 def _remember_placeholder(sent_media, msg) -> None:
-    """After sending the placeholder bytes, keep the resulting Photo so later sends don't re-upload."""
+    """After sending the placeholder buffer, keep the resulting Photo so later sends don't re-upload."""
     global _placeholder_media
-    if isinstance(sent_media, (bytes, bytearray)) and msg is not None and getattr(msg, "photo", None):
+    if isinstance(sent_media, io.BytesIO) and msg is not None and getattr(msg, "photo", None):
         _placeholder_media = msg.photo
 
 
