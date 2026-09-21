@@ -80,6 +80,30 @@ def post_ids_in(text: str) -> list[int]:
     return ids
 
 
+
+# ---------------------------------------------------------------- carousel reply (ticket #19)
+
+def carousel_caption(reply: str, current: int) -> str:
+    """`reply` with the numbered line `<current+1>. …` prefixed by `▶ ` (others untouched);
+    cut to CAPTION_LIMIT characters. current is 0-based."""
+    raise NotImplementedError("ticket #19")
+
+
+def carousel_data(kind: str, idx: int, ids: list[int]) -> bytes:
+    """Callback payload `<kind>:<idx>:<id,id,…>` as bytes; kind is 'c' (navigate) or 'p' (ask price)."""
+    raise NotImplementedError("ticket #19")
+
+
+def parse_carousel_data(data: bytes) -> tuple[str, int, list[int]] | None:
+    """Inverse of carousel_data; None for anything malformed or unknown kind."""
+    raise NotImplementedError("ticket #19")
+
+
+def carousel_buttons(idx: int, ids: list[int], ask_price: bool) -> list[list]:
+    """Inline keyboard rows: row 0 = ◀ · `<idx+1>/<n>` · ▶ (omitted when n == 1);
+    last row = `Narxini so'rash` (only when ask_price) + `Kanalda ko'rish` url button."""
+    raise NotImplementedError("ticket #19")
+
 # ---------------------------------------------------------------- client (lazy: no .env at import)
 
 def owner_id() -> int:
