@@ -191,12 +191,19 @@ _captions: dict[int, str] = {}
 
 
 async def _placeholder(client):
-    """The channel's profile photo, shown for posts without a photo/video (cached)."""
+    """The channel's profile photo for posts without a photo/video: downloaded once as bytes
+    (bots may not list profile photos), then replaced by the uploaded Photo after the first send."""
     global _placeholder_media
     if _placeholder_media is None:
-        photos = await client.get_profile_photos(config.CHANNEL, limit=1)
-        _placeholder_media = photos[0] if photos else None
+        _placeholder_media = await client.download_profile_photo(config.CHANNEL, file=bytes) or None
     return _placeholder_media
+
+
+def _remember_placeholder(sent_media, msg) -> None:
+    """After sending the placeholder bytes, keep the resulting Photo so later sends don't re-upload."""
+    global _placeholder_media
+    if isinstance(sent_media, (bytes, bytearray)) and msg is not None and getattr(msg, "photo", None):
+        _placeholder_media = msg.photo
 
 
 async def _media_for(client, ids: list[int]) -> dict[int, object]:
@@ -233,6 +240,7 @@ async def send_reply(event, reply: str) -> None:
                     caption=carousel_caption(reply, idx),
                     buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx)),
                     reply_to=event.message.id)
+                _remember_placeholder(media[ids[0]], msg)
                 if msg is not None and getattr(msg, "id", None) is not None:
                     if len(_captions) >= 2000:  # bounded; older ones are rebuilt from the catalog
                         _captions.pop(next(iter(_captions)))
@@ -274,9 +282,10 @@ async def handle_callback(event) -> None:
             await event.answer()
             return
         reply = _captions.get(event.message_id) or _rebuild_reply(ids)
-        await event.edit(carousel_caption(reply, idx), file=media[ids[idx]],
-                         buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx)),
-                         link_preview=False)
+        msg = await event.edit(carousel_caption(reply, idx), file=media[ids[idx]],
+                               buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx)),
+                               link_preview=False)
+        _remember_placeholder(media[ids[idx]], msg)
         await event.answer()
     except Exception:
         log.exception("handle_callback failed for chat %s", getattr(event, "sender_id", "?"))
