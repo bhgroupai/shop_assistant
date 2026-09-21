@@ -19,6 +19,13 @@ def format_product(p: Product) -> str:
     return line.replace("\n", " ")
 
 
+def format_products(products: list[Product]) -> str:
+    """Numbered lines `1. <format_product line>`; price None renders `narxi: so'rab beraman`;
+    empty list → NO_RESULTS. Ends with the offer line
+    `Narxini bilmoqchi bo'lsangiz raqamini yozing` only when at least one item has no price."""
+    raise NotImplementedError("ticket #21")
+
+
 def _format_products(products: list[Product]) -> str:
     return "\n".join(format_product(p) for p in products) or NO_RESULTS
 
