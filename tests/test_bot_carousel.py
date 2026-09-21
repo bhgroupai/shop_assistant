@@ -20,6 +20,15 @@ NO_RESULTS = "Kechirasiz, bunday mahsulot topilmadi."
 IDS = [983, 950, 926]
 
 
+def _data(button) -> bytes:
+    """Callback payload of a Telethon inline button (`.type.data` since Telethon 1.45)."""
+    return button.type.data
+
+
+def _url(button) -> str:
+    return button.type.url
+
+
 # ---------------------------------------------------------------- carousel_caption
 
 def test_caption_marks_current_line_only():
@@ -95,15 +104,15 @@ def test_buttons_two_rows_and_nav_texts():
 
 def test_buttons_nav_data():
     rows = carousel_buttons(1, IDS, ask_price=False)
-    assert rows[0][0].data == carousel_data("c", 0, IDS)
-    assert rows[0][2].data == carousel_data("c", 2, IDS)
+    assert _data(rows[0][0]) == carousel_data("c", 0, IDS)
+    assert _data(rows[0][2]) == carousel_data("c", 2, IDS)
 
 
 def test_buttons_wrap_around():
     last = carousel_buttons(2, IDS, ask_price=False)
-    assert last[0][2].data == b"c:0:983,950,926"
+    assert _data(last[0][2]) == b"c:0:983,950,926"
     first = carousel_buttons(0, IDS, ask_price=False)
-    assert first[0][0].data == b"c:2:983,950,926"
+    assert _data(first[0][0]) == b"c:2:983,950,926"
 
 
 def test_buttons_single_id_has_no_nav_row():
@@ -116,7 +125,7 @@ def test_buttons_ask_price():
     rows = carousel_buttons(1, IDS, ask_price=True)
     price = [b for b in rows[-1] if getattr(b, "text", None) == "Narxini so'rash"]
     assert len(price) == 1
-    assert price[0].data == carousel_data("p", 1, IDS)
+    assert _data(price[0]) == carousel_data("p", 1, IDS)
 
 
 def test_buttons_no_ask_price_button_when_off():
@@ -126,7 +135,7 @@ def test_buttons_no_ask_price_button_when_off():
 
 def test_buttons_url_points_to_current_post():
     rows = carousel_buttons(1, IDS, ask_price=True)
-    url_buttons = [b for b in rows[-1] if hasattr(b, "url")]
+    url_buttons = [b for b in rows[-1] if hasattr(b.type, "url")]
     assert len(url_buttons) == 1
     assert url_buttons[0].text == "Kanalda ko'rish"
-    assert url_buttons[0].url.endswith("/status_dokon/950")
+    assert _url(url_buttons[0]).endswith("/status_dokon/950")

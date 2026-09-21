@@ -108,31 +108,16 @@ def parse_carousel_data(data: bytes) -> tuple[str, int, list[int]] | None:
     return m.group(1), int(m.group(2)), [int(i) for i in m.group(3).split(",")]
 
 
-_button_cls: dict[tuple, type] = {}
-
-
-def _expose(button, attr: str):
-    """Telethon < 1.45 buttons carry `.data` / `.url` directly; 1.45+ moved them into `.type`.
-    Give the button that attribute either way (same class name, still a TL button for send_file)."""
-    if hasattr(button, attr):
-        return button
-    cls = type(button)
-    sub = _button_cls.get((cls, attr))
-    if sub is None:
-        sub = type(cls.__name__, (cls,), {attr: property(lambda self: getattr(self.type, attr))})
-        _button_cls[(cls, attr)] = sub
-    button.__class__ = sub
-    return button
 
 
 def _inline(text: str, data: bytes):
     from telethon import Button
-    return _expose(Button.inline(text, data), "data")
+    return Button.inline(text, data)
 
 
 def _url(text: str, url: str):
     from telethon import Button
-    return _expose(Button.url(text, url), "url")
+    return Button.url(text, url)
 
 
 def carousel_buttons(idx: int, ids: list[int], ask_price: bool) -> list[list]:
