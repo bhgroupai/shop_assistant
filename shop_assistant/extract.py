@@ -177,6 +177,12 @@ def _to_int(v) -> int | None:
     return parse_price(str(v))
 
 
+def product_name(item: dict, category: str, body: str) -> str:
+    """Deterministic guard: return a customer-readable product name (type word + brand/model)
+    when the model's `item["name"]` is a known slogan, empty, a URL or has no letters."""
+    raise NotImplementedError("ticket #20")
+
+
 def _build(post: Post, body: str, item: dict) -> Product:
     category = item.get("category")
     if category not in config.CATEGORIES:
