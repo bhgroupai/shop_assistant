@@ -11,7 +11,8 @@ MAX_RESULTS = 5            # FR-18
 FETCH_LIMIT = 500          # FR-1
 CATEGORIES = ["kiyim", "poyabzal", "aksessuar", "boshqa"]   # SDD §2.2
 HISTORY_TURNS = 10         # FR-17
-EXTRACT_BATCH = 10         # NFR-3
+EXTRACT_BATCH = 5          # NFR-3; 10 made Ollama's gemma4 tool-call parser fail ~1 in 3 responses
+MIN_PRICE = 10_000         # so'm; smaller "prices" from the model are junk → None
 EMBED_BATCH = 128          # NFR-3
 
 MODEL = "gemma4:31b"            # Ollama, tool calling (SDD §1.1)
