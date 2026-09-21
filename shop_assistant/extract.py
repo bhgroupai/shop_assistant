@@ -141,6 +141,15 @@ colors: list of colour names as written, [] if none.
 season: kuz / qish / bahor / yoz if the post says so, else null.
 keywords: 4-8 short search synonyms for the product across four scripts/languages:
   Uzbek Latin, Uzbek Cyrillic, Russian and English (e.g. dvoyka, двойка, костюм двойка, two-piece set, sport kostyum).
+
+name: what the customer reads first. It is the PRODUCT TYPE (krossovka, kurtka, sviter, dvoyka, poyabzal,
+  kostyum, ko'ylak, futbolka, sumka...) plus the brand/model if the post names one. 2-4 words.
+  Never a slogan, greeting, emoji line or "new collection" text, even if that is the first line of the post.
+  If the post does not say what the item is, use the category word: kiyim / poyabzal / aksessuar.
+  Examples:
+    "Yengi kolleksiya / Krossovka Nike Air / Razmer: 40 41 42"  -> name "Krossovka Nike Air"  (not "Yengi kolleksiya")
+    "Okam bu modella siz uchun eng yahshilari / Qishki kurtka Barena"  -> name "Qishki kurtka Barena"  (not the slogan)
+    "New collection / Razmer: M L XL / Narx: 350.000"  -> name "Kiyim"  (type unknown -> category word, not "New collection")
 """
 
 
@@ -155,10 +164,9 @@ def _sane_price(v: int | None) -> int | None:
 
 
 def _fallback(post: Post, body: str) -> Product:
-    first = body.split("\n", 1)[0].strip() if body else ""
     return Product(
         id=post.id, date=post.date[:10], link=post.link,
-        name=first or f"post {post.id}", category="boshqa",
+        name=product_name({}, "boshqa", body), category="boshqa",
         price=None, subscriber_price=None, body=body,   # model skipped it: not a product post → no price guessing
     )
 
@@ -177,6 +185,63 @@ def _to_int(v) -> int | None:
     return parse_price(str(v))
 
 
+_SLOGANS = frozenset({
+    "yengi kolleksiya", "yangi kolleksiya", "yangi kolleksiya keldi", "yengi kolleksiya keldi",
+    "new collection", "новая коллекция", "янги коллекция", "енги коллекция",
+    "yangi model", "yengi model", "yangi tovar", "yengi tovar", "yangi mahsulot",
+    "unknown", "none", "null", "n/a", "product", "mahsulot",
+    "okam bu modella siz uchun eng yahshilari", "okam bu modella siz uchun eng yaxshilari",
+    "assalomu alaykum", "assalomu aleykum", "salom", "hello", "привет", "здравствуйте",
+    "sale", "aksiya", "акция", "chegirma", "скидка", "top", "hit", "хит",
+})
+_NAME_MAX_WORDS = 4
+_TRAIL_PUNCT_RE = re.compile(r"[\s!?.,:;‼️…\-–—*#\"'«»()\[\]]+$")
+
+
+def _norm_name(s: str) -> str:
+    """Lower-case, collapse whitespace, drop emoji and trailing punctuation — for slogan matching."""
+    s = _strip_emoji(s)
+    s = " ".join(s.split()).lower()
+    return _TRAIL_PUNCT_RE.sub("", s).strip()
+
+
+def _is_bad_name(name: str) -> bool:
+    if not name:
+        return True
+    low = name.lower()
+    if "://" in low or low.startswith("www.") or "t.me/" in low:
+        return True
+    if not any(ch.isalpha() for ch in name):
+        return True
+    return _norm_name(name) in _SLOGANS
+
+
+def _cap_words(s: str) -> str:
+    words = s.split()[:_NAME_MAX_WORDS]
+    out = " ".join(words)
+    return out[:1].upper() + out[1:] if out else out
+
+
+def product_name(item: dict, category: str, body: str) -> str:
+    """Deterministic guard: return a customer-readable product name (type word + brand/model)
+    when the model's `item["name"]` is a known slogan, empty, a URL or has no letters."""
+    raw = item.get("name") if isinstance(item, dict) else None
+    name = " ".join(str(raw).split()) if raw is not None else ""
+    if not _is_bad_name(name):
+        return name
+    keywords = [" ".join(str(k).split()) for k in (item.get("keywords") or []) if isinstance(item, dict)]
+    keywords = [k for k in keywords if any(ch.isalpha() for ch in k) and not _is_bad_name(k)]
+    if keywords:
+        return _cap_words(keywords[0])
+    if category in config.CATEGORIES and category != "boshqa":
+        return _cap_words(category)
+    # boshqa / unknown category: the first body line that has letters, unless it is itself a slogan.
+    first = next((" ".join(l.split()) for l in (body or "").splitlines() if any(ch.isalpha() for ch in l)), "")
+    if first and not _is_bad_name(first):
+        return _cap_words(first)
+    return "Mahsulot"
+
+
 def _build(post: Post, body: str, item: dict) -> Product:
     category = item.get("category")
     if category not in config.CATEGORIES:
@@ -184,7 +249,7 @@ def _build(post: Post, body: str, item: dict) -> Product:
     price = _sane_price(_to_int(item.get("price")))
     if price is None:
         price = _sane_price(_body_price(body))
-    name = str(item.get("name") or "").strip() or (body.split("\n", 1)[0] if body else f"post {post.id}")
+    name = product_name(item, category, body)
     season = item.get("season")
     return Product(
         id=post.id, date=post.date[:10], link=post.link,
