@@ -6,6 +6,8 @@ from shop_assistant.models import FaqEntry, Product
 
 NO_RESULTS = "no results"
 NO_FAQ = "no faq entries"
+ASK_PRICE = "narxi: so'rab beraman"
+OFFER_PRICE = "Narxini bilmoqchi bo'lsangiz raqamini yozing"
 
 
 def format_product(p: Product) -> str:
@@ -19,8 +21,21 @@ def format_product(p: Product) -> str:
     return line.replace("\n", " ")
 
 
-def _format_products(products: list[Product]) -> str:
-    return "\n".join(format_product(p) for p in products) or NO_RESULTS
+def format_products(products: list[Product]) -> str:
+    """Numbered lines `1. <format_product line>`; price None renders `narxi: so'rab beraman`;
+    empty list → NO_RESULTS. Ends with the offer line
+    `Narxini bilmoqchi bo'lsangiz raqamini yozing` only when at least one item has no price."""
+    if not products:
+        return NO_RESULTS
+    lines = []
+    for i, p in enumerate(products, start=1):
+        line = format_product(p)
+        if p.price is None:
+            line = line.replace("narx: so'rang", ASK_PRICE, 1)
+        lines.append(f"{i}. {line}")
+    if any(p.price is None for p in products):
+        lines.append(OFFER_PRICE)
+    return "\n".join(lines)
 
 
 def _format_faq(entry: FaqEntry) -> str:
@@ -32,8 +47,9 @@ def find_products_tool(category: str | None = None, min_price: int | None = None
                        max_price: int | None = None, size: str | None = None,
                        color: str | None = None, keywords: list[str] | None = None) -> str:
     """Filter the shop catalog. All given filters are ANDed; newest posts first.
-    Returns one product per line: name · price · sizes · date · link (· [eskirgan] if the post is old),
-    or "no results".
+    Returns one numbered product per line: N. name · price · sizes · date · link (· [eskirgan] if the
+    post is old), or "no results". Items without a price show "narxi: so'rab beraman"; then a final
+    offer line tells the customer to write the item number to ask for its price.
 
     Args:
         category: One of: kiyim (clothes), poyabzal (shoes), aksessuar (accessories), boshqa (other).
@@ -47,7 +63,7 @@ def find_products_tool(category: str | None = None, min_price: int | None = None
     products = search.find_products(category=category, min_price=min_price, max_price=max_price,
                                     size=size, color=color, keywords=keywords,
                                     limit=config.MAX_RESULTS)
-    return _format_products(products)
+    return format_products(products)
 
 
 @beta_tool
@@ -61,7 +77,7 @@ def semantic_search_tool(text: str, max_price: int | None = None) -> str:
         max_price: Maximum price in so'm (UZS).
     """
     products = search.semantic_search(text, max_price=max_price, limit=config.MAX_RESULTS)
-    return _format_products(products)
+    return format_products(products)
 
 
 @beta_tool
@@ -73,7 +89,7 @@ def latest_posts_tool(n: int = 5) -> str:
         n: How many latest products to return (1-5).
     """
     n = max(1, min(int(n), config.MAX_RESULTS))
-    return _format_products(search.latest_posts(n))
+    return format_products(search.latest_posts(n))
 
 
 @beta_tool
