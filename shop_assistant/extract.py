@@ -130,8 +130,9 @@ using the same id.
 
 Categories (choose exactly one): {", ".join(config.CATEGORIES)}.
   kiyim = clothing, poyabzal = shoes, aksessuar = accessories, boshqa = anything else.
-  boshqa also covers teasers and announcements that name no concrete item ("Yengi kolleksiya",
-  "Kutib qoling", "New collection", a bare username or greeting) — these must not become products.
+  boshqa also covers chatter and announcements that name no concrete item and give no price and
+  no sizes (a bare username, a greeting, "Kutib qoling", a discount notice). A post that lists
+  sizes or a price is a product even when its first line is a teaser like "Yengi kolleksiya".
 
 Prices are in so'm and written in shop notation. Convert to a plain integer:
   "980.000ming" -> 980000, "980 000 so'm" -> 980000, "1.200.000" -> 1200000, "350.000" -> 350000, "980k" -> 980000.

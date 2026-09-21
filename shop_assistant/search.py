@@ -87,6 +87,12 @@ def keyword_match(customer_keywords: list[str], product: Product) -> bool:
     return False
 
 
+def is_sellable(p: Product) -> bool:
+    """Announcements, teasers and chatter are extracted as category `boshqa`; they are kept in
+    products.jsonl for the record but never shown to a customer (FR-11)."""
+    return p.category != "boshqa"
+
+
 def find_products(category: str | None = None, min_price: int | None = None,
                   max_price: int | None = None, size: str | None = None,
                   color: str | None = None, keywords: list[str] | None = None,
@@ -100,6 +106,8 @@ def find_products(category: str | None = None, min_price: int | None = None,
     norm_color = normalise(color) if color is not None else None
 
     for p in catalog:
+        if not is_sellable(p):
+            continue
         if norm_category is not None and normalise(p.category) != norm_category:
             continue
         if min_price is not None and (p.price is None or p.price < min_price):
@@ -146,7 +154,7 @@ def semantic_search(text: str, max_price: int | None = None, limit: int = 5) -> 
     results: list[Product] = []
     for i in cosine_top_k(q, _matrix, k=limit * 4):
         p = _by_id.get(_ids[i])
-        if p is None:
+        if p is None or not is_sellable(p):
             continue
         if max_price is not None and (p.price is None or p.price > max_price):
             continue

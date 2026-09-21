@@ -54,3 +54,37 @@ def test_find_products_no_filters_empty_catalog():
 
 def test_latest_posts(products):
     assert [p.id for p in latest_posts(2, products=products)] == [1300, 1234]
+
+
+# ---- ticket #20 follow-up: announcements (category boshqa) never reach a customer
+
+def _announcement(products):
+    import dataclasses
+    return dataclasses.replace(products[0], id=695, link="https://t.me/status_dokon/695",
+                               name="Boshqa", category="boshqa", price=None, sizes=(),
+                               keywords=("kiyim", "yengi kolleksiya"), body="Yengi kolleksiya")
+
+
+def test_find_products_skips_boshqa(products):
+    catalog = products + [_announcement(products)]
+    assert all(p.category != "boshqa" for p in find_products(products=catalog))
+    assert find_products(keywords=["kolleksiya"], products=catalog) == []
+    assert find_products(category="boshqa", products=catalog) == []
+
+
+def test_latest_posts_skips_boshqa(products):
+    catalog = products + [_announcement(products)]
+    assert 695 not in [p.id for p in latest_posts(10, products=catalog)]
+
+
+def test_semantic_search_skips_boshqa(products, monkeypatch):
+    import numpy as np
+    from shop_assistant import search
+    ann = _announcement(products)
+    monkeypatch.setattr(search, "_by_id", {ann.id: ann, products[1].id: products[1]})
+    monkeypatch.setattr(search, "_ids", [ann.id, products[1].id])
+    monkeypatch.setattr(search, "_matrix", np.array([[1.0, 0.0], [0.0, 1.0]]))
+    from shop_assistant import index
+    monkeypatch.setattr(index, "embed", lambda texts: np.array([[1.0, 0.0]]))
+    ids = [p.id for p in search.semantic_search("yengi kolleksiya")]
+    assert 695 not in ids and products[1].id in ids
