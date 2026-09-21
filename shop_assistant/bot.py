@@ -64,6 +64,12 @@ def parse_esc_header(text: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def post_ids_in(text: str) -> list[int]:
+    """Ids of `t.me/<config.CHANNEL>/<id>` links in `text`, in order of first appearance,
+    without duplicates, at most 5. Used to forward the matching channel posts (ticket #19)."""
+    raise NotImplementedError("ticket #19")
+
+
 # ---------------------------------------------------------------- client (lazy: no .env at import)
 
 def owner_id() -> int:
