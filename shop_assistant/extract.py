@@ -149,6 +149,11 @@ def _client():
     return anthropic.Anthropic()
 
 
+def _sane_price(v: int | None) -> int | None:
+    """Nothing in this shop costs under 10 000 so'm; the model returns 1 / 2026 for announcement posts."""
+    return v if v is not None and v >= config.MIN_PRICE else None
+
+
 def _fallback(post: Post, body: str) -> Product:
     first = body.split("\n", 1)[0].strip() if body else ""
     return Product(
@@ -176,15 +181,15 @@ def _build(post: Post, body: str, item: dict) -> Product:
     category = item.get("category")
     if category not in config.CATEGORIES:
         category = "boshqa"
-    price = _to_int(item.get("price"))
+    price = _sane_price(_to_int(item.get("price")))
     if price is None:
-        price = _body_price(body)
+        price = _sane_price(_body_price(body))
     name = str(item.get("name") or "").strip() or (body.split("\n", 1)[0] if body else f"post {post.id}")
     season = item.get("season")
     return Product(
         id=post.id, date=post.date[:10], link=post.link,
         name=name, category=category,
-        price=price, subscriber_price=_to_int(item.get("subscriber_price")),
+        price=price, subscriber_price=_sane_price(_to_int(item.get("subscriber_price"))),
         sizes=_to_str_tuple(item.get("sizes")),
         colors=_to_str_tuple(item.get("colors")),
         keywords=tuple(normalise(str(k)) for k in item.get("keywords") or [] if str(k).strip()),
