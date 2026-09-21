@@ -154,7 +154,7 @@ def _fallback(post: Post, body: str) -> Product:
     return Product(
         id=post.id, date=post.date[:10], link=post.link,
         name=first or f"post {post.id}", category="boshqa",
-        price=_body_price(body), subscriber_price=None, body=body,
+        price=None, subscriber_price=None, body=body,   # model skipped it: not a product post → no price guessing
     )
 
 
@@ -205,6 +205,10 @@ def _call_llm(client, posts: list[Post], bodies: dict[int, str]) -> dict[int, di
         messages=[{"role": "user", "content": user}],
     )
     items: dict[int, dict] = {}
+    if not resp.content:
+        # Ollama's gemma4 tool-call parser sometimes fails on the model's own quoting and
+        # returns content=null; the caller retries / splits the batch.
+        raise _LLMParseError("empty content (tool-call parse failed on the server)")
     for block in resp.content:            # gemma4 may emit a `thinking` block first (SDD §3.2)
         if getattr(block, "type", None) != "tool_use":
             continue
@@ -219,6 +223,30 @@ def _call_llm(client, posts: list[Post], bodies: dict[int, str]) -> dict[int, di
     return items
 
 
+class _LLMParseError(RuntimeError):
+    pass
+
+
+def _extract_chunk(client, chunk: list[Post]) -> list[Product]:
+    """One LLM call for `chunk`; on a parse failure retry once, then split in halves; a single
+    post that still fails becomes a fallback record (no price guessing)."""
+    bodies = {p.id: strip_footer(p.caption) for p in chunk}
+    items: dict[int, dict] | None = None
+    for _ in range(2):
+        try:
+            items = _call_llm(client, chunk, bodies)
+            break
+        except _LLMParseError:
+            continue
+    if items is None:
+        if len(chunk) == 1:
+            return [_fallback(chunk[0], bodies[chunk[0].id])]
+        mid = len(chunk) // 2
+        return _extract_chunk(client, chunk[:mid]) + _extract_chunk(client, chunk[mid:])
+    return [(_build(p, bodies[p.id], items[p.id]) if items.get(p.id) else _fallback(p, bodies[p.id]))
+            for p in chunk]
+
+
 def extract_batch(posts: list[Post]) -> list[Product]:
     """Batches of config.EXTRACT_BATCH per call (NFR-3)."""
     if not posts:
@@ -226,12 +254,7 @@ def extract_batch(posts: list[Post]) -> list[Product]:
     client = _client()
     out: list[Product] = []
     for start in range(0, len(posts), config.EXTRACT_BATCH):
-        chunk = posts[start:start + config.EXTRACT_BATCH]
-        bodies = {p.id: strip_footer(p.caption) for p in chunk}
-        items = _call_llm(client, chunk, bodies)
-        for p in chunk:
-            item = items.get(p.id)
-            out.append(_build(p, bodies[p.id], item) if item else _fallback(p, bodies[p.id]))
+        out.extend(_extract_chunk(client, posts[start:start + config.EXTRACT_BATCH]))
     return out
 
 
