@@ -86,23 +86,73 @@ def post_ids_in(text: str) -> list[int]:
 def carousel_caption(reply: str, current: int) -> str:
     """`reply` with the numbered line `<current+1>. …` prefixed by `▶ ` (others untouched);
     cut to CAPTION_LIMIT characters. current is 0-based."""
-    raise NotImplementedError("ticket #19")
+    marker = re.compile(rf"^{current + 1}\. ", re.MULTILINE)
+    out = marker.sub(lambda m: "▶ " + m.group(0), reply or "", count=1)
+    return out[:CAPTION_LIMIT]
 
 
 def carousel_data(kind: str, idx: int, ids: list[int]) -> bytes:
     """Callback payload `<kind>:<idx>:<id,id,…>` as bytes; kind is 'c' (navigate) or 'p' (ask price)."""
-    raise NotImplementedError("ticket #19")
+    return f"{kind}:{idx}:{','.join(str(i) for i in ids)}".encode()
 
 
 def parse_carousel_data(data: bytes) -> tuple[str, int, list[int]] | None:
     """Inverse of carousel_data; None for anything malformed or unknown kind."""
-    raise NotImplementedError("ticket #19")
+    try:
+        text = (data or b"").decode()
+    except UnicodeDecodeError:
+        return None
+    m = re.fullmatch(r"([cp]):(\d+):(\d+(?:,\d+)*)", text)
+    if not m:
+        return None
+    return m.group(1), int(m.group(2)), [int(i) for i in m.group(3).split(",")]
+
+
+_button_cls: dict[tuple, type] = {}
+
+
+def _expose(button, attr: str):
+    """Telethon < 1.45 buttons carry `.data` / `.url` directly; 1.45+ moved them into `.type`.
+    Give the button that attribute either way (same class name, still a TL button for send_file)."""
+    if hasattr(button, attr):
+        return button
+    cls = type(button)
+    sub = _button_cls.get((cls, attr))
+    if sub is None:
+        sub = type(cls.__name__, (cls,), {attr: property(lambda self: getattr(self.type, attr))})
+        _button_cls[(cls, attr)] = sub
+    button.__class__ = sub
+    return button
+
+
+def _inline(text: str, data: bytes):
+    from telethon import Button
+    return _expose(Button.inline(text, data), "data")
+
+
+def _url(text: str, url: str):
+    from telethon import Button
+    return _expose(Button.url(text, url), "url")
 
 
 def carousel_buttons(idx: int, ids: list[int], ask_price: bool) -> list[list]:
     """Inline keyboard rows: row 0 = ◀ · `<idx+1>/<n>` · ▶ (omitted when n == 1);
     last row = `Narxini so'rash` (only when ask_price) + `Kanalda ko'rish` url button."""
-    raise NotImplementedError("ticket #19")
+    n = len(ids)
+    rows: list[list] = []
+    if n > 1:
+        rows.append([
+            _inline("◀", carousel_data("c", (idx - 1) % n, ids)),
+            _inline(f"{idx + 1}/{n}", carousel_data("c", idx, ids)),
+            _inline("▶", carousel_data("c", (idx + 1) % n, ids)),
+        ])
+    last: list = []
+    if ask_price:
+        last.append(_inline("Narxini so'rash", carousel_data("p", idx, ids)))
+    last.append(_url("Kanalda ko'rish", f"https://t.me/{config.CHANNEL}/{ids[idx]}"))
+    rows.append(last)
+    return rows
+
 
 # ---------------------------------------------------------------- client (lazy: no .env at import)
 
@@ -123,26 +173,120 @@ def _client():
 
 # ---------------------------------------------------------------- handlers
 
-async def _photos_for(client, ids: list[int]) -> list:
-    """Photo media of the channel posts `ids`, in the same order; posts without a photo are skipped."""
-    msgs = await client.get_messages(config.CHANNEL, ids=ids)
-    return [m.photo for m in msgs if m is not None and m.photo is not None]
+# Carousel state. _media_cache: channel post id -> photo/video, or None when the post has neither
+# (so ◀/▶ never refetch). _captions: carousel message id -> full agent reply; empty after a restart,
+# then the caption is rebuilt from the catalog.
+_media_cache: dict[int, object] = {}
+_captions: dict[int, str] = {}
+
+
+async def _media_for(client, ids: list[int]) -> dict[int, object]:
+    """{post id: photo or video} for the channel posts `ids` that carry one; cached per id."""
+    missing = [i for i in ids if i not in _media_cache]
+    if missing:
+        msgs = await client.get_messages(config.CHANNEL, ids=missing)
+        for i, m in zip(missing, msgs):
+            _media_cache[i] = (m.photo or m.video) if m is not None else None
+    return {i: _media_cache[i] for i in ids if _media_cache.get(i) is not None}
+
+
+def _ask_price_on(reply: str, number_idx: int) -> bool:
+    """True when the `<number_idx+1>. …` line of `reply` has no price (ASK_PRICE marker)."""
+    from shop_assistant.tools import ASK_PRICE
+    prefix = f"{number_idx + 1}. "
+    return any(line.startswith(prefix) and ASK_PRICE in line for line in (reply or "").split("\n"))
 
 
 async def send_reply(event, reply: str) -> None:
-    """One compact message: an album of the mentioned posts' photos with `reply` as caption (#19).
-    Falls back to plain text (no link preview) when there are no photos or the album fails."""
+    """One message: media of the first mentioned post that has a photo/video, `reply` as caption
+    (current item marked ▶) and inline ◀/▶ buttons that edit it in place (#19).
+    Falls back to plain text (no link preview) when there is no media or the send fails."""
     ids = post_ids_in(reply)
     if ids and len(reply) <= CAPTION_LIMIT:
         try:
-            photos = await _photos_for(event.client, ids)
-            if photos:
-                await event.client.send_file(event.chat_id, photos, caption=reply,
-                                             reply_to=event.message.id, link_preview=False)
+            media = await _media_for(event.client, ids)
+            nav = [i for i in ids if i in media]
+            if nav:
+                idx = ids.index(nav[0])  # position in the reply's numbering; ids ⊆ callback data
+                msg = await event.client.send_file(
+                    event.chat_id, media[nav[0]],
+                    caption=carousel_caption(reply, idx),
+                    buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx)),
+                    reply_to=event.message.id)
+                if msg is not None and getattr(msg, "id", None) is not None:
+                    if len(_captions) >= 2000:  # bounded; older ones are rebuilt from the catalog
+                        _captions.pop(next(iter(_captions)))
+                    _captions[msg.id] = reply
                 return
         except Exception as e:
-            log.warning("album to chat %s failed for posts %s: %s", event.chat_id, ids, e)
+            log.warning("carousel to chat %s failed for posts %s: %s", event.chat_id, ids, e)
     await event.reply(reply, link_preview=False)
+
+
+def _rebuild_reply(ids: list[int]) -> str:
+    """After a restart (_captions empty): the numbered list for `ids` straight from the catalog."""
+    from shop_assistant import search, tools
+    by_id = {p.id: p for p in search.PRODUCTS}
+    return tools.format_products([by_id[i] for i in ids if i in by_id])
+
+
+async def _next_with_media(event, idx: int, ids: list[int], media: dict) -> int | None:
+    """Nearest index with media, moving the way the user pressed (◀ if `idx` is one before the
+    currently shown item, else ▶); None when no item has media."""
+    n = len(ids)
+    step = 1
+    try:
+        msg = await event.get_message()
+        m = re.search(r"^▶ (\d+)\. ", msg.raw_text or "", re.MULTILINE) if msg else None
+        cur = int(m.group(1)) - 1 if m else None  # 0-based index of the item shown now
+        if cur is not None and idx == (cur - 1) % n:
+            step = -1
+    except Exception as e:
+        log.warning("could not read carousel message %s: %s", getattr(event, "message_id", "?"), e)
+    for k in range(n):
+        j = (idx + step * k) % n
+        if ids[j] in media:
+            return j
+    return None
+
+
+async def handle_callback(event) -> None:
+    """Inline button press on a carousel message: 'c' → edit media/caption/buttons in place,
+    'p' → escalate the current post's price to the owner. Owner presses are ignored."""
+    try:
+        if event.sender_id == owner_id():
+            return
+        parsed = parse_carousel_data(event.data)
+        if parsed is None:
+            await event.answer()
+            return
+        kind, idx, ids = parsed
+        if not 0 <= idx < len(ids):
+            await event.answer()
+            return
+        if kind == "p":
+            await escalate(event.sender_id, f"Narxi? https://t.me/{config.CHANNEL}/{ids[idx]}", [ids[idx]])
+            log.info("price escalation from chat %s for post %s", event.sender_id, ids[idx])
+            await event.answer("Egaga yuborildi, javobini shu yerga yozaman", alert=False)
+            return
+        media = await _media_for(event.client, ids)
+        if ids[idx] not in media:  # item without photo/video: keep stepping in the pressed direction
+            idx = await _next_with_media(event, idx, ids, media)
+            if idx is None:
+                await event.answer()
+                return
+        reply = _captions.get(event.message_id) or _rebuild_reply(ids)
+        await event.edit(carousel_caption(reply, idx), file=media[ids[idx]],
+                         buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx)),
+                         link_preview=False)
+        await event.answer()
+    except Exception:
+        log.exception("handle_callback failed for chat %s", getattr(event, "sender_id", "?"))
+        try:
+            await event.answer("Xatolik")
+        except Exception:
+            log.exception("could not answer callback")
+
 
 async def handle_customer(event) -> None:
     """to_thread(run_agent) → reply; log the turn."""
@@ -214,6 +358,7 @@ def run() -> None:
         # groups / channels: ignored (C-5)
 
     client.add_event_handler(dispatch, events.NewMessage(incoming=True))
+    client.add_event_handler(handle_callback, events.CallbackQuery())
     client.start(bot_token=config.secret("TG_BOT_TOKEN"))
     main_loop = client.loop
     log.info("bot started; owner=%s", owner)
