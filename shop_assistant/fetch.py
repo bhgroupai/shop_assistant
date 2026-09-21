@@ -50,6 +50,23 @@ def fetch(channel: str, min_id: int = 0, limit: int = 500) -> list[Post]:
     return asyncio.run(_fetch(channel, min_id, limit))
 
 
+def _existing_ids(path) -> set[int]:
+    """Ids already written to posts.jsonl (empty set when the file does not exist)."""
+    ids: set[int] = set()
+    if not path.exists():
+        return ids
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ids.add(int(json.loads(line)["id"]))
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                continue
+    return ids
+
+
 def main(full: bool = False) -> None:
     """CLI: append new posts to posts.jsonl and update state.last_post_id (FR-7)."""
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -64,13 +81,17 @@ def main(full: bool = False) -> None:
             pass
 
     posts = fetch(config.CHANNEL, min_id, config.FETCH_LIMIT)
-    
+
+    # --full re-fetches from id 0: skip ids already in posts.jsonl so the file never accumulates duplicates.
+    existing = _existing_ids(config.POSTS_PATH)
+    new_posts = [p for p in posts if p.id not in existing]
+
     if posts:
         with open(config.POSTS_PATH, "a", encoding="utf-8") as f:
-            for post in posts:
+            for post in new_posts:
                 json.dump(asdict(post), f, ensure_ascii=False)
                 f.write("\n")
-                
+
         last_post_id = max(p.id for p in posts)
         
         state = {}
@@ -87,7 +108,7 @@ def main(full: bool = False) -> None:
     else:
         last_post_id = min_id
         
-    print(f"fetched {len(posts)} posts, last_post_id={last_post_id}")
+    print(f"fetched {len(posts)} posts, {len(new_posts)} new, last_post_id={last_post_id}")
 
 
 if __name__ == "__main__":
