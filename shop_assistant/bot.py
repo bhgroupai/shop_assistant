@@ -18,6 +18,7 @@ ESCALATED_REPLY = "Egasi tez orada javob beradi 🙏"
 OWNER_HINT_NOT_REPLY = "Mijozga javob berish uchun #esc xabariga reply qiling."
 OWNER_HINT_NOT_ESC = "Bu #esc xabari emas."
 OWNER_SENT = "✓ yuborildi"
+MAX_FORWARD = 5  # channel posts forwarded per reply (ticket #19)
 
 # Set inside run() after the client starts; escalate_sync() (called from the agent's
 # worker thread) uses it to schedule coroutines on the bot's loop.
@@ -64,6 +65,20 @@ def parse_esc_header(text: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def post_ids_in(text: str) -> list[int]:
+    """Ids of `t.me/<config.CHANNEL>/<id>` links in `text`, in order of first appearance,
+    without duplicates, at most 5. Used to forward the matching channel posts (ticket #19)."""
+    pattern = re.compile(r"(?:https?://)?t\.me/" + re.escape(config.CHANNEL) + r"/(\d+)\b")
+    ids: list[int] = []
+    for m in pattern.finditer(text or ""):
+        i = int(m.group(1))
+        if i not in ids:
+            ids.append(i)
+            if len(ids) == MAX_FORWARD:
+                break
+    return ids
+
+
 # ---------------------------------------------------------------- client (lazy: no .env at import)
 
 def owner_id() -> int:
@@ -92,6 +107,12 @@ async def handle_customer(event) -> None:
         reply = await asyncio.to_thread(agent.run_agent, event.chat_id, text)
         ms = int((time.monotonic() - t0) * 1000)
         await event.reply(reply)
+        ids = post_ids_in(reply)
+        if ids:
+            try:  # photo + caption + "Forwarded from" header (FR-14); one call, not a loop
+                await event.client.forward_messages(event.chat_id, ids, from_peer=config.CHANNEL)
+            except Exception as e:
+                log.warning("forward to chat %s failed for posts %s: %s", event.chat_id, ids, e)
         last = getattr(agent, "last_run", {}) or {}
         log_turn(event.chat_id, text, last.get("tools", []), reply,
                  last.get("escalated", False), ms, last.get("usd", 0.0))
