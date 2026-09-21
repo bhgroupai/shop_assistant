@@ -201,6 +201,7 @@ def _call_llm(client, posts: list[Post], bodies: dict[int, str]) -> dict[int, di
         system=_SYSTEM,
         tools=[_TOOL],
         tool_choice={"type": "tool", "name": "record_products"},
+        thinking=config.THINKING,
         messages=[{"role": "user", "content": user}],
     )
     items: dict[int, dict] = {}
