@@ -20,6 +20,7 @@ OWNER_HINT_NOT_ESC = "Bu #esc xabari emas."
 OWNER_SENT = "✓ yuborildi"
 MAX_FORWARD = 5  # posts illustrated per reply (ticket #19)
 CAPTION_LIMIT = 1024  # Telegram media caption limit
+STALE_NOTE = "⚠️ Eskirgan bo'lishi mumkin — egadan tasdiqlang"
 
 # Set inside run() after the client starts; escalate_sync() (called from the agent's
 # worker thread) uses it to schedule coroutines on the bot's loop.
@@ -83,12 +84,35 @@ def post_ids_in(text: str) -> list[int]:
 
 # ---------------------------------------------------------------- carousel reply (ticket #19)
 
+def _fmt_price(p: str) -> str:
+    digits = p.replace(".", "").replace(" ", "")
+    if digits.isdigit():
+        return f"{int(digits):,}".replace(",", " ") + " so'm"
+    return re.sub(r"^narxi?:\s*", "", p, flags=re.IGNORECASE)   # "narxi: so'rab beraman" → "so'rab beraman"
+
+
 def carousel_caption(reply: str, current: int) -> str:
-    """`reply` with the numbered line `<current+1>. …` prefixed by `▶ ` (others untouched);
-    cut to CAPTION_LIMIT characters. current is 0-based."""
-    marker = re.compile(rf"^{current + 1}\. ", re.MULTILINE)
-    out = marker.sub(lambda m: "▶ " + m.group(0), reply or "", count=1)
-    return out[:CAPTION_LIMIT]
+    """Card for item `current+1` of the numbered `reply` (0-based): title line `N. name`, then
+    `Narxi:`, `O'lcham:` (omitted when '-'), `Sana:` and a stale warning when the line carries one.
+    Falls back to the whole reply when that line does not exist. Cut to CAPTION_LIMIT."""
+    n = current + 1
+    m = re.search(rf"^{n}\. (.+)$", reply or "", re.MULTILINE)
+    if not m:
+        return (reply or "")[:CAPTION_LIMIT]
+    line = m.group(1)
+    stale = "eskirgan" in line.lower()
+    line = re.sub(r"\s*\(.*?\)\s*$", "", line)          # trailing "(… eskirgan …)" note
+    parts = [p.strip() for p in line.split(" · ")]
+    parts = [p for p in parts if p and not p.startswith("[") and "t.me/" not in p]
+    name, price, sizes, date = (parts + ["", "", "", ""])[:4]
+    out = [f"{n}. {name}", f"Narxi: {_fmt_price(price)}"]
+    if sizes and sizes != "-":
+        out.append("O'lcham: " + ", ".join(s.strip() for s in sizes.split(",")))
+    if date:
+        out.append(f"Sana: {date}")
+    if stale:
+        out.append(STALE_NOTE)
+    return "\n".join(out)[:CAPTION_LIMIT]
 
 
 def carousel_data(kind: str, idx: int, ids: list[int]) -> bytes:
@@ -222,7 +246,7 @@ async def _next_with_media(event, idx: int, ids: list[int], media: dict) -> int 
     step = 1
     try:
         msg = await event.get_message()
-        m = re.search(r"^▶ (\d+)\. ", msg.raw_text or "", re.MULTILINE) if msg else None
+        m = re.match(r"^(\d+)\. ", msg.raw_text or "") if msg else None
         cur = int(m.group(1)) - 1 if m else None  # 0-based index of the item shown now
         if cur is not None and idx == (cur - 1) % n:
             step = -1

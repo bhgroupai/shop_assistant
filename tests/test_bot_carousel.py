@@ -31,36 +31,53 @@ def _url(button) -> str:
 
 # ---------------------------------------------------------------- carousel_caption
 
-def test_caption_marks_current_line_only():
-    lines = carousel_caption(REPLY_THREE, 1).split("\n")
-    assert lines == [INTRO, LINE1, "▶ " + LINE2, LINE3, OFFER]
-    assert lines[2].startswith("▶ 2. ")
+def test_caption_is_one_item_card():
+    card = carousel_caption(REPLY_THREE, 0)
+    lines = card.split("\n")
+    assert lines[0] == "1. Krossovka Nike Air"
+    assert "Narxi: 350 000 so'm" in lines
+    assert "O'lcham: 40, 41, 42" in lines
+    assert "Sana: 2026-09-12" in lines
+    assert "2. " not in card and "3. " not in card and INTRO not in card and OFFER not in card
+    assert "t.me" not in card
 
 
-def test_caption_current_zero_marks_first_line():
-    lines = carousel_caption(REPLY_THREE, 0).split("\n")
-    assert lines == [INTRO, "▶ " + LINE1, LINE2, LINE3, OFFER]
+def test_caption_second_item():
+    card = carousel_caption(REPLY_THREE, 1)
+    assert card.startswith("2. Dvoyka\n")
+    assert "Narxi: 980 000 so'm" in card and "O'lcham: M, L, XL" in card
 
 
-def test_caption_cut_to_limit():
-    long_lines = [f"{n}. Dvoyka · 980000 · {'M,L,XL,' * 40} · https://t.me/status_dokon/{900 + n}" for n in range(1, 6)]
-    reply = "\n".join([INTRO] + long_lines + [OFFER])
-    assert len(reply) > CAPTION_LIMIT
-    out = carousel_caption(reply, 0)
-    assert len(out) <= CAPTION_LIMIT
-    assert out.startswith(INTRO + "\n▶ 1. ")
+def test_caption_missing_price_and_sizes():
+    line = "1. Kiyim · narxi: so'rab beraman · - · 2026-08-19 · https://t.me/status_dokon/928"
+    card = carousel_caption("\n".join([INTRO, line]), 0)
+    assert "Narxi: so'rab beraman" in card
+    assert "O'lcham" not in card
 
 
-def test_caption_without_numbered_lines_unchanged():
+def test_caption_stale_note():
+    line = ("1. Kiyim · narxi: so'rab beraman · - · 2026-06-09 · https://t.me/status_dokon/695 "
+            "(Bu mahsulot eskirgan bo'lishi mumkin, egadan tasdiqlash lozim)")
+    card = carousel_caption("\n".join([INTRO, line]), 0)
+    assert card.startswith("1. Kiyim\n")
+    assert "eskirgan" in card.lower()
+    assert "(" not in card
+    card2 = carousel_caption("1. Dvoyka · 980000 · M · 2026-09-10 · https://t.me/status_dokon/926 · [eskirgan]", 0)
+    assert "eskirgan" in card2.lower() and "[" not in card2
+
+
+def test_caption_without_numbered_line_falls_back_to_reply():
     assert carousel_caption(NO_RESULTS, 0) == NO_RESULTS
+    assert carousel_caption(REPLY_THREE, 7) == REPLY_THREE[:CAPTION_LIMIT]
 
 
 def test_caption_ten_not_confused_with_one():
-    lines = [f"{n}. Dvoyka · 980000 · https://t.me/status_dokon/{900 + n}" for n in range(1, 11)]
-    out = carousel_caption("\n".join(lines), 0).split("\n")
-    assert out[0] == "▶ " + lines[0]
-    assert out[9] == lines[9]
-    assert sum(line.startswith("▶ ") for line in out) == 1
+    lines = [f"{i}. Item {i} · 100000 · M · 2026-09-0{i % 9 + 1} · https://t.me/status_dokon/{900 + i}"
+             for i in range(1, 11)]
+    card = carousel_caption("\n".join([INTRO, *lines]), 0)
+    assert card.startswith("1. Item 1\n")
+    card10 = carousel_caption("\n".join([INTRO, *lines]), 9)
+    assert card10.startswith("10. Item 10\n")
 
 
 # ---------------------------------------------------------------- carousel_data / parse_carousel_data
