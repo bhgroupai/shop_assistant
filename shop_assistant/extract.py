@@ -130,6 +130,8 @@ using the same id.
 
 Categories (choose exactly one): {", ".join(config.CATEGORIES)}.
   kiyim = clothing, poyabzal = shoes, aksessuar = accessories, boshqa = anything else.
+  boshqa also covers teasers and announcements that name no concrete item ("Yengi kolleksiya",
+  "Kutib qoling", "New collection", a bare username or greeting) — these must not become products.
 
 Prices are in so'm and written in shop notation. Convert to a plain integer:
   "980.000ming" -> 980000, "980 000 so'm" -> 980000, "1.200.000" -> 1200000, "350.000" -> 350000, "980k" -> 980000.
@@ -242,6 +244,14 @@ def product_name(item: dict, category: str, body: str) -> str:
     return "Mahsulot"
 
 
+def is_announcement(post: Post, body: str, price: int | None, sizes: tuple[str, ...]) -> bool:
+    """Deterministic guard for the category: a post that carries no sellable signal — empty body,
+    or no media together with no price and no sizes — is an announcement, not a product."""
+    if not body.strip():
+        return True
+    return not post.has_media and price is None and not sizes
+
+
 def _build(post: Post, body: str, item: dict) -> Product:
     category = item.get("category")
     if category not in config.CATEGORIES:
@@ -249,6 +259,8 @@ def _build(post: Post, body: str, item: dict) -> Product:
     price = _sane_price(_to_int(item.get("price")))
     if price is None:
         price = _sane_price(_body_price(body))
+    if is_announcement(post, body, price, _to_str_tuple(item.get("sizes"))):
+        category = "boshqa"
     name = product_name(item, category, body)
     season = item.get("season")
     return Product(
