@@ -131,6 +131,7 @@ Thin `@beta_tool` wrappers around §3.5 that return compact text (one line per p
 ### 3.8 `bot.py` — FR-19, FR-21, FR-22, FR-26, C-5
 - One Telethon bot client. Handlers:
   - `NewMessage(incoming, is_private, sender != owner)` → `asyncio.to_thread(run_agent, chat_id, text)` → reply. Groups are ignored (C-5).
+  - **Carousel reply (S4, #19).** When the agent's text names posts, the customer gets ONE message: item 1's photo/video (the channel logo when the post has none), a card caption (`N. name` / `Narxi:` / `O'lcham:` / `Sana:` / stale warning) and inline buttons `◀ · N/n · ▶`, `Narxini so'rash` (only when the item has no price → `escalate` with that post id), `Kanalda ko'rish`. `CallbackQuery` edits the message in place; callback data `c:<idx>:<ids>` is self-contained (≤ 64 bytes) so navigation survives restarts. Text-only fallback (no link preview) when the send fails. The agent's numbered text still carries every link (FR-11/FR-14, eval parses ids) — it is the caption source, not shown as a list.
   - `escalate(customer_id, question, post_ids)` → message to `TG_OWNER_ID`: `"#esc <customer_id>\n<question>\n<links>"`. Tells the customer "Egasi tez orada javob beradi".
   - `NewMessage` from owner **that is a reply** to an `#esc` message → parse `customer_id` from the quoted text → forward owner's text to the customer → append to `faq.jsonl` → `index.reindex_faq()`.
   - `/stats` from owner only → counts from `state.json` and today's `log.jsonl`.
@@ -152,6 +153,8 @@ Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service:
 | D-4 | Rewrite the whole embedding matrix on index | patch rows | N is small; correctness over cleverness |
 | D-5 | Owner replies via Telegram "reply to" the escalation message | inline buttons / commands | zero UI to build; the quoted `#esc <id>` header carries the routing |
 | D-6 | Conversation history in memory only | persist per customer | NFR-4 privacy; restart loses only the current chat context |
+| D-8 | Customer replies are a one-message carousel with inline buttons (2026-09-21) | forward the channel posts / send an album / plain text list | forwards and albums made customers scroll through five screens; an album cannot carry buttons; Telegram's native "Show as carousel" is app-only until a Bot API layer exposes it |
+| D-9 | `boshqa` records stay in `products.jsonl` but are never returned by search (`search.is_sellable`) | drop them at extraction | ids stay stable for the eval; announcements are visible for debugging |
 | D-7 | Ingestion outside the bot process | live `on_channel_post` handler | keeps the service simple; live updates are a v2 item |
 
 ## 5. Module Layout
@@ -207,4 +210,5 @@ shop_assistant/                   # repo root; run everything from here
 | 0.2 | 2026-09-16 | §5: code lives in a `shop_assistant/` package (so `python -m shop_assistant.x` works from repo root); `models.py` holds Post/Product/FaqEntry; scaffolding for tickets 1–15 |
 | 0.3 | 2026-09-17 | §5: tests per ticket live on the ticket branch (senior-written), `main` keeps only merged tests; CI added |
 | 0.5 | 2026-09-17 | Spike #3 results: embed normalised text (§3.3, §3.5, D-3); `max_tokens ≥ 1000` for extraction (§3.2) |
+| 0.6 | 2026-09-21 | S4: §3.8 carousel reply (D-8); §3.2 product names = type + brand (`product_name` guard) and announcements → `boshqa` (`is_announcement`); §3.5 search excludes `boshqa` (D-9); tools number results, `narxi: so'rab beraman` + offer line (#21) |
 | 0.4 | 2026-09-17 | SRS C-2 v0.4: Claude + Voyage replaced by Ollama on the Codeschool GPU server (`gemma4:31b`, `bge-m3`); §1.1, §3.2, §3.3, §3.7, §3.9, §7 updated; deploy target = Codeschool |
