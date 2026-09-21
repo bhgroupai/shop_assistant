@@ -1,0 +1,20 @@
+{"q": "dvoyka narxi qancha?", "expected": {"posts": [1077, 1055, 1047, 998]}, "note": "filters"}
+{"q": "600 ming gacha sviter bormi?", "expected": {"posts": [1009, 1007, 1000]}, "note": "filters"}
+{"q": "42 razmer krossovka bormi", "expected": {"posts": [983, 950]}, "note": "filters"}
+{"q": "барсофка борми?", "expected": {"posts": [1040, 1021, 926, 919]}, "note": "filters"}
+{"q": "пойабзал 42 размер борми", "expected": {"posts": [1071, 1067, 1057]}, "note": "filters"}
+{"q": "туфли 43 размер есть?", "expected": {"posts": [994, 991, 893, 890]}, "note": "filters"}
+{"q": "джинсовка есть?", "expected": {"posts": [1069, 1016, 997]}, "note": "filters"}
+{"q": "куртка есть?", "expected": {"posts": [1043, 1069, 1016]}, "note": "filters"}
+{"q": "kuzda kiyishga mos narsa bormi", "expected": {"posts": [948, 928, 997]}, "note": "semantic"}
+{"q": "sovuqda kiyiladigan issiq narsa bormi", "expected": {"posts": [948, 957]}, "note": "semantic"}
+{"q": "to'yga kiyadigan chiroyli narsa", "expected": {"posts": [705, 721]}, "note": "semantic"}
+{"q": "что-нибудь для холодной погоды", "expected": {"posts": [997, 1069, 948]}, "note": "semantic"}
+{"q": "yangi narsalar bormi?", "expected": {"posts": [1077, 1073, 1071, 1070, 1069]}, "note": "new", "date": "2026-09-21"}
+{"q": "янги нарса борми?", "expected": {"posts": [1077, 1073, 1071, 1070, 1069]}, "note": "new", "date": "2026-09-21"}
+{"q": "что нового?", "expected": {"posts": [1077, 1073, 1071, 1070, 1069]}, "note": "new", "date": "2026-09-21"}
+{"q": "Stefano Ricci kiyim hali bormi?", "expected": {"escalate": true}, "note": "escalate"}
+{"q": "dastavka Samarqandga qancha?", "expected": {"escalate": true}, "note": "escalate"}
+{"q": "karta bilan to'lasa bo'ladimi?", "expected": {"escalate": true}, "note": "escalate"}
+{"q": "iPhone 15 bormi?", "expected": {"escalate": true}, "note": "escalate"}
+{"q": "<media>", "expected": {"escalate": true}, "note": "escalate"}
