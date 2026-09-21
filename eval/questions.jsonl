@@ -17,4 +17,4 @@
 {"q": "dastavka Samarqandga qancha?", "expected": {"escalate": true}, "note": "escalate"}
 {"q": "karta bilan to'lasa bo'ladimi?", "expected": {"escalate": true}, "note": "escalate"}
 {"q": "iPhone 15 bormi?", "expected": {"escalate": true}, "note": "escalate"}
-{"q": "<media>", "expected": {"escalate": true}, "note": "escalate"}
+{"q": "zakaz qilsam bo'ladimi, qanday olsam bo'ladi?", "expected": {"escalate": true}, "note": "escalate"}

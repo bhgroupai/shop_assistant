@@ -105,7 +105,7 @@ def _install_capture(tools_mod, capture: _Capture) -> None:
         capture.ask_owner_calls.append(kw)
         return "forwarded"
 
-    for name in ("find_products_tool", "semantic_search_tool"):
+    for name in ("find_products_tool", "semantic_search_tool", "latest_posts_tool"):
         tool = getattr(tools_mod, name)
         original = getattr(tool, "_func_with_validate", tool)
         setattr(tools_mod, name, _patch_tool(tool, name, make_recorder(name, original)))
@@ -196,7 +196,7 @@ def main(dry: bool = False, questions_path=None) -> None:
         answer = run_agent(i, q, History())
         ms = int((time.perf_counter() - t0) * 1000)
 
-        posts = sorted(capture.ids("find_products_tool") | capture.ids("semantic_search_tool"))
+        posts = sorted(capture.ids("find_products_tool") | capture.ids("semantic_search_tool") | capture.ids("latest_posts_tool"))
         escalated = bool(capture.ask_owner_calls)
         expected_ids = set(expected.get("posts", []))
         r = {

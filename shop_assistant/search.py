@@ -40,7 +40,10 @@ def load_products(path: Path | None = None) -> list[Product]:
             line = line.strip()
             if not line:
                 continue
-            prods.append(_parse_product(json.loads(line)))
+            p = _parse_product(json.loads(line))
+            if not p.keywords and not p.sizes and p.price is None:
+                continue   # announcement / non-product post (extract fallback): never a search result
+            prods.append(p)
     return prods
 
 
