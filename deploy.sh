@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Deploy shop_assistant to the codeschool server as a user-level systemd service (ticket #15).
+# Usage: ./deploy.sh [--data]     --data also syncs data/ (products, embeddings, faq, log)
+set -euo pipefail
+
+HOST=codeschool
+DEST='~/shop_assistant'
+UNIT=shop-assistant.service
+SYNC_DATA=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --data) SYNC_DATA=1 ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
+
+cd "$(dirname "$0")"
+
+# The bot must never run twice (Telegram delivers each update to one session only).
+if pgrep -f shop_assistant.main >/dev/null 2>&1; then
+  echo "refusing to deploy: shop_assistant.main is running locally — stop it first" >&2
+  exit 1
+fi
+
+EXCLUDES=(--exclude '__pycache__' --exclude '.git' --exclude '.env' --exclude '.venv' --exclude 'session/')
+if [[ $SYNC_DATA -eq 0 ]]; then
+  EXCLUDES+=(--exclude 'data/')
+fi
+
+echo "==> rsync to $HOST:$DEST"
+rsync -az --delete "${EXCLUDES[@]}" ./ "$HOST:$DEST/"
+
+echo "==> install deps + (re)start service on $HOST"
+ssh "$HOST" bash -s <<REMOTE
+set -euo pipefail
+cd $DEST
+uv venv -q --allow-existing
+uv pip install -q -r requirements.txt
+mkdir -p ~/.config/systemd/user
+cp $UNIT ~/.config/systemd/user/$UNIT
+systemctl --user daemon-reload
+systemctl --user enable --now $UNIT
+systemctl --user restart $UNIT
+sleep 5
+systemctl --user is-active $UNIT
+journalctl --user -u $UNIT -n 5 --no-pager
+REMOTE
+
+echo "==> done"

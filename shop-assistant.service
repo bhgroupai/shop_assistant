@@ -1,0 +1,18 @@
+# User-level systemd unit (SDD §1.1 deploy row, ticket #15).
+# Install: cp shop-assistant.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#          && systemctl --user enable --now shop-assistant
+# Needs `loginctl enable-linger $USER` once so the unit survives logout.
+[Unit]
+Description=Shop Assistant Telegram bot (status_dokon)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/shop_assistant
+ExecStart=%h/shop_assistant/.venv/bin/python -u -m shop_assistant.main
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

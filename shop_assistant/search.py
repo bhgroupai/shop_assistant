@@ -4,6 +4,8 @@ import datetime
 import json
 from pathlib import Path
 
+import numpy as np
+
 from shop_assistant import config
 from shop_assistant.models import FaqEntry, Product
 from shop_assistant.textnorm import normalise
@@ -42,7 +44,21 @@ def load_products(path: Path | None = None) -> list[Product]:
     return prods
 
 
+def _load_matrix() -> tuple[np.ndarray, list[int]]:
+    """embeddings.npy + embeddings_ids.json → (float32[N, D], ids). Missing/mismatched → empty."""
+    if not (config.EMBEDDINGS_PATH.exists() and config.EMBEDDINGS_IDS_PATH.exists()):
+        return np.zeros((0, 0), dtype=np.float32), []
+    matrix = np.load(config.EMBEDDINGS_PATH).astype(np.float32, copy=False)
+    with open(config.EMBEDDINGS_IDS_PATH, "r", encoding="utf-8") as f:
+        ids = [int(i) for i in json.load(f)]
+    if matrix.ndim != 2 or matrix.shape[0] != len(ids):
+        return np.zeros((0, 0), dtype=np.float32), []
+    return matrix, ids
+
+
 PRODUCTS: list[Product] = load_products()
+_by_id: dict[int, Product] = {p.id: p for p in PRODUCTS}
+_matrix, _ids = _load_matrix()
 
 
 def is_stale(date: str, today: str, stale_days: int) -> bool:
@@ -101,10 +117,15 @@ def find_products(category: str | None = None, min_price: int | None = None,
             return []
         results = results[:limit]
 
+    return _with_stale(results)
+
+
+def _with_stale(products: list[Product]) -> list[Product]:
+    """Copies with `stale` computed against today (FR-16)."""
     today = datetime.date.today().isoformat()
     return [
         dataclasses.replace(p, stale=is_stale(p.date, today, config.STALE_DAYS))
-        for p in results
+        for p in products
     ]
 
 
@@ -115,30 +136,64 @@ def latest_posts(n: int = 5, products: list[Product] | None = None) -> list[Prod
 
 def semantic_search(text: str, max_price: int | None = None, limit: int = 5) -> list[Product]:
     """index.embed([normalise(text)]) — D-3 —, cosine over the matrix, then price filter, top-k (FR-10)."""
-    raise NotImplementedError("ticket #8")
+    from shop_assistant import index   # lazy: index imports ollama; avoids import cycles
+    if limit <= 0 or _matrix.shape[0] == 0:
+        return []
+    q = index.embed([normalise(text)])[0]
+    results: list[Product] = []
+    for i in cosine_top_k(q, _matrix, k=limit * 4):
+        p = _by_id.get(_ids[i])
+        if p is None:
+            continue
+        if max_price is not None and (p.price is None or p.price > max_price):
+            continue
+        results.append(p)
+        if len(results) >= limit:
+            break
+    return _with_stale(results)
 
 
 def cosine_top_k(query, matrix, k: int) -> list[int]:
     """Indices of the k rows of `matrix` most similar to `query` (pure numpy)."""
-    raise NotImplementedError("ticket #8")
+    matrix = np.asarray(matrix, dtype=np.float32)
+    if matrix.ndim != 2 or matrix.shape[0] == 0 or k <= 0:
+        return []
+    query = np.asarray(query, dtype=np.float32).reshape(-1)
+    matrix_n = matrix / (np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-9)
+    query_n = query / (np.linalg.norm(query) + 1e-9)
+    scores = matrix_n @ query_n
+    return [int(i) for i in np.argsort(-scores, kind="stable")[:k]]
 
 
 def search_faq(text: str, limit: int = 3) -> list[FaqEntry]:
     """Semantic search over faq entries. Stub returns [] until R2 (ticket #16)."""
-    raise NotImplementedError("ticket #8")
+    # R2: ticket #16 — FAQ store not built yet
+    return []
 
 
 def reload() -> None:
     """Re-read products.jsonl + .npy from disk (admin /reindex)."""
-    global PRODUCTS
+    global PRODUCTS, _by_id, _matrix, _ids
     PRODUCTS = load_products()
+    _by_id = {p.id: p for p in PRODUCTS}
+    _matrix, _ids = _load_matrix()
 
 
 if __name__ == "__main__":
     import sys
+    def _line(p: Product) -> str:
+        return (f"  {p.id} · {p.name} · {p.price} · {' '.join(p.sizes) or '-'} · {p.date}"
+                f" · {'stale' if p.stale else 'fresh'}")
+
     q = " ".join(sys.argv[1:])
-    print(find_products(keywords=q.split()))
+    print("filters:")
+    for p in find_products(keywords=q.split()):
+        print(_line(p))
+    print("semantic:")
     try:
-        print(semantic_search(q))
-    except NotImplementedError as e:
-        print(f"semantic_search: {e}")
+        if _matrix.shape[0] == 0:
+            print(f"  no embeddings at {config.EMBEDDINGS_PATH} — run python -m shop_assistant.index")
+        for p in semantic_search(q):
+            print(_line(p))
+    except Exception as e:   # no embeddings / Ollama down — keep the CLI usable (FR-24)
+        print(f"  semantic_search unavailable: {type(e).__name__}: {e}")

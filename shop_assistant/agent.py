@@ -1,6 +1,27 @@
 """Tool Runner agent (Anthropic SDK → Ollama) + per-customer history. SDD §3.7, FR-13…18/20. Ticket #10."""
+import contextvars
+import json
 
-SYSTEM_PROMPT = ""   # written in ticket #10 (SDD §3.7 rules 1–5)
+import anthropic
+
+from shop_assistant import config
+from shop_assistant.tools import NO_FAQ, NO_RESULTS, TOOLS
+
+SYSTEM_PROMPT = """You are the assistant of the Telegram shop @status_dokon. Rules:
+1. Reply in the customer's language AND script: Uzbek Latin, Uzbek Cyrillic or Russian, exactly as they wrote.
+2. First call find_products_tool. If it returns "no results" and the question has descriptive words, call semantic_search_tool. For delivery, payment, address, hours or other shop questions call search_faq_tool.
+3. Never state a price, size, color or availability that is not in a tool result. Never guess stock.
+4. Call ask_owner when: the customer asks about stock/availability; both searches found nothing relevant; or the question is about orders, delivery, payment or anything outside the catalog. After ask_owner, tell the customer the owner will reply soon.
+5. Show at most 5 products per reply; if there are more, ask the customer to narrow down. Always include each product's link. For products marked [eskirgan] add a note in the customer's language that it may be sold out and should be confirmed with the owner.
+Be short and friendly; no markdown tables."""
+
+APOLOGY = "Kechirasiz, texnik xatolik. Birozdan keyin qayta urinib ko'ring."
+
+client = anthropic.Anthropic()
+
+current_chat_id: contextvars.ContextVar[int] = contextvars.ContextVar("current_chat_id", default=0)
+
+last_run: dict = {"tools": [], "escalated": False, "usd": 0.0}
 
 
 class History:
@@ -11,21 +32,80 @@ class History:
         self._chats: dict[int, list[dict]] = {}
 
     def get(self, chat_id: int) -> list[dict]:
-        raise NotImplementedError("ticket #10")
+        return self._chats.get(chat_id, [])
 
     def append(self, chat_id: int, role: str, content) -> None:
         """Append and trim so at most max_turns user/assistant pairs remain."""
-        raise NotImplementedError("ticket #10")
+        msgs = self._chats.setdefault(chat_id, [])
+        msgs.append({"role": role, "content": content})
+        limit = 2 * self.max_turns
+        if len(msgs) > limit:
+            del msgs[: len(msgs) - limit]
 
     def clear(self, chat_id: int) -> None:
-        raise NotImplementedError("ticket #10")
+        self._chats.pop(chat_id, None)
+
+
+_history = History(config.HISTORY_TURNS)
+
+
+def _text_of(message) -> str:
+    """Concatenate text blocks; skips thinking / tool_use blocks (gemma4 may emit `thinking`)."""
+    return "\n".join(b.text for b in message.content if getattr(b, "type", None) == "text").strip()
 
 
 def run_agent(chat_id: int, text: str, history: History | None = None) -> str:
     """Blocking. tool_runner with TOOLS, max_iterations=8, max_tokens=1024. Returns final reply text."""
-    raise NotImplementedError("ticket #10")
+    global last_run
+    h = history or _history
+    current_chat_id.set(chat_id)
+    run: dict = {"tools": [], "escalated": False, "usd": 0.0}
+    h.append(chat_id, "user", text)
+    try:
+        runner = client.beta.messages.tool_runner(
+            model=config.MODEL,
+            max_tokens=config.MAX_TOKENS,
+            system=SYSTEM_PROMPT,
+            tools=TOOLS,
+            messages=list(h.get(chat_id)),
+            max_iterations=config.MAX_ITERATIONS,
+        )
+        last_message = None
+        for message in runner:
+            last_message = message
+            tool_uses = [b for b in message.content if getattr(b, "type", None) == "tool_use"]
+            if not tool_uses:
+                continue
+            response = runner.generate_tool_call_response() or {"content": []}
+            results = {r["tool_use_id"]: r.get("content", "") for r in response["content"]}
+            for tu in tool_uses:
+                print(f"  · {tu.name}({json.dumps(tu.input, ensure_ascii=False)})")
+                out = results.get(tu.id, "")
+                out = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+                n = 0 if out.strip() in (NO_RESULTS, NO_FAQ) else sum(1 for ln in out.splitlines() if ln.strip())
+                run["tools"].append({"name": tu.name, "input": dict(tu.input), "n_results": n})
+                if tu.name == "ask_owner":
+                    run["escalated"] = True
+    except anthropic.APIError as e:
+        print(f"  ! APIError: {e}")
+        last_run = run
+        msgs = h.get(chat_id)
+        if msgs and msgs[-1] == {"role": "user", "content": text}:
+            msgs.pop()          # keep history consistent; the apology is not stored either
+        return APOLOGY
+    last_run = run
+    reply = _text_of(last_message) if last_message is not None else ""
+    h.append(chat_id, "assistant", reply or APOLOGY)
+    return reply or APOLOGY
 
 
 if __name__ == "__main__":
     import sys
-    print(run_agent(0, " ".join(sys.argv[1:])))
+    if sys.argv[1:]:
+        print(run_agent(0, " ".join(sys.argv[1:])))
+    else:
+        try:
+            while (q := input("> ").strip()):
+                print(run_agent(0, q))
+        except (EOFError, KeyboardInterrupt):
+            pass
