@@ -186,17 +186,29 @@ def _client():
 # (so ◀/▶ never refetch). _captions: carousel message id -> full agent reply; empty after a restart,
 # then the caption is rebuilt from the catalog.
 _media_cache: dict[int, object] = {}
+_placeholder_media = None
 _captions: dict[int, str] = {}
 
 
+async def _placeholder(client):
+    """The channel's profile photo, shown for posts without a photo/video (cached)."""
+    global _placeholder_media
+    if _placeholder_media is None:
+        photos = await client.get_profile_photos(config.CHANNEL, limit=1)
+        _placeholder_media = photos[0] if photos else None
+    return _placeholder_media
+
+
 async def _media_for(client, ids: list[int]) -> dict[int, object]:
-    """{post id: photo or video} for the channel posts `ids` that carry one; cached per id."""
+    """{post id: photo or video} for the channel posts `ids`; posts without one get the channel
+    logo so every item of the reply is navigable and numbering stays 1:1. Cached per id."""
     missing = [i for i in ids if i not in _media_cache]
     if missing:
         msgs = await client.get_messages(config.CHANNEL, ids=missing)
         for i, m in zip(missing, msgs):
             _media_cache[i] = (m.photo or m.video) if m is not None else None
-    return {i: _media_cache[i] for i in ids if _media_cache.get(i) is not None}
+    fallback = await _placeholder(client)
+    return {i: (_media_cache.get(i) or fallback) for i in ids if (_media_cache.get(i) or fallback) is not None}
 
 
 def _ask_price_on(reply: str, number_idx: int) -> bool:
@@ -207,18 +219,17 @@ def _ask_price_on(reply: str, number_idx: int) -> bool:
 
 
 async def send_reply(event, reply: str) -> None:
-    """One message: media of the first mentioned post that has a photo/video, `reply` as caption
-    (current item marked ▶) and inline ◀/▶ buttons that edit it in place (#19).
+    """One message: item 1's photo/video (channel logo when the post has none), its card as
+    caption and inline ◀/▶ buttons that edit it in place (#19).
     Falls back to plain text (no link preview) when there is no media or the send fails."""
     ids = post_ids_in(reply)
     if ids and len(reply) <= CAPTION_LIMIT:
         try:
             media = await _media_for(event.client, ids)
-            nav = [i for i in ids if i in media]
-            if nav:
-                idx = ids.index(nav[0])  # position in the reply's numbering; ids ⊆ callback data
+            if ids[0] in media:
+                idx = 0
                 msg = await event.client.send_file(
-                    event.chat_id, media[nav[0]],
+                    event.chat_id, media[ids[0]],
                     caption=carousel_caption(reply, idx),
                     buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx)),
                     reply_to=event.message.id)
@@ -237,26 +248,6 @@ def _rebuild_reply(ids: list[int]) -> str:
     from shop_assistant import search, tools
     by_id = {p.id: p for p in search.PRODUCTS}
     return tools.format_products([by_id[i] for i in ids if i in by_id])
-
-
-async def _next_with_media(event, idx: int, ids: list[int], media: dict) -> int | None:
-    """Nearest index with media, moving the way the user pressed (◀ if `idx` is one before the
-    currently shown item, else ▶); None when no item has media."""
-    n = len(ids)
-    step = 1
-    try:
-        msg = await event.get_message()
-        m = re.match(r"^(\d+)\. ", msg.raw_text or "") if msg else None
-        cur = int(m.group(1)) - 1 if m else None  # 0-based index of the item shown now
-        if cur is not None and idx == (cur - 1) % n:
-            step = -1
-    except Exception as e:
-        log.warning("could not read carousel message %s: %s", getattr(event, "message_id", "?"), e)
-    for k in range(n):
-        j = (idx + step * k) % n
-        if ids[j] in media:
-            return j
-    return None
 
 
 async def handle_callback(event) -> None:
@@ -279,11 +270,9 @@ async def handle_callback(event) -> None:
             await event.answer("Egaga yuborildi, javobini shu yerga yozaman", alert=False)
             return
         media = await _media_for(event.client, ids)
-        if ids[idx] not in media:  # item without photo/video: keep stepping in the pressed direction
-            idx = await _next_with_media(event, idx, ids, media)
-            if idx is None:
-                await event.answer()
-                return
+        if ids[idx] not in media:
+            await event.answer()
+            return
         reply = _captions.get(event.message_id) or _rebuild_reply(ids)
         await event.edit(carousel_caption(reply, idx), file=media[ids[idx]],
                          buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx)),
