@@ -69,6 +69,7 @@ def run_agent(chat_id: int, text: str, history: History | None = None) -> str:
             tools=TOOLS,
             messages=list(h.get(chat_id)),
             max_iterations=config.MAX_ITERATIONS,
+            thinking=config.THINKING,
         )
         last_message = None
         for message in runner:
