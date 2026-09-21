@@ -18,7 +18,8 @@ ESCALATED_REPLY = "Egasi tez orada javob beradi 🙏"
 OWNER_HINT_NOT_REPLY = "Mijozga javob berish uchun #esc xabariga reply qiling."
 OWNER_HINT_NOT_ESC = "Bu #esc xabari emas."
 OWNER_SENT = "✓ yuborildi"
-MAX_FORWARD = 5  # channel posts forwarded per reply (ticket #19)
+MAX_FORWARD = 5  # posts illustrated per reply (ticket #19)
+CAPTION_LIMIT = 1024  # Telegram media caption limit
 
 # Set inside run() after the client starts; escalate_sync() (called from the agent's
 # worker thread) uses it to schedule coroutines on the bot's loop.
@@ -98,6 +99,27 @@ def _client():
 
 # ---------------------------------------------------------------- handlers
 
+async def _photos_for(client, ids: list[int]) -> list:
+    """Photo media of the channel posts `ids`, in the same order; posts without a photo are skipped."""
+    msgs = await client.get_messages(config.CHANNEL, ids=ids)
+    return [m.photo for m in msgs if m is not None and m.photo is not None]
+
+
+async def send_reply(event, reply: str) -> None:
+    """One compact message: an album of the mentioned posts' photos with `reply` as caption (#19).
+    Falls back to plain text (no link preview) when there are no photos or the album fails."""
+    ids = post_ids_in(reply)
+    if ids and len(reply) <= CAPTION_LIMIT:
+        try:
+            photos = await _photos_for(event.client, ids)
+            if photos:
+                await event.client.send_file(event.chat_id, photos, caption=reply,
+                                             reply_to=event.message.id, link_preview=False)
+                return
+        except Exception as e:
+            log.warning("album to chat %s failed for posts %s: %s", event.chat_id, ids, e)
+    await event.reply(reply, link_preview=False)
+
 async def handle_customer(event) -> None:
     """to_thread(run_agent) → reply; log the turn."""
     try:
@@ -106,13 +128,7 @@ async def handle_customer(event) -> None:
         t0 = time.monotonic()
         reply = await asyncio.to_thread(agent.run_agent, event.chat_id, text)
         ms = int((time.monotonic() - t0) * 1000)
-        await event.reply(reply)
-        ids = post_ids_in(reply)
-        if ids:
-            try:  # photo + caption + "Forwarded from" header (FR-14); one call, not a loop
-                await event.client.forward_messages(event.chat_id, ids, from_peer=config.CHANNEL)
-            except Exception as e:
-                log.warning("forward to chat %s failed for posts %s: %s", event.chat_id, ids, e)
+        await send_reply(event, reply)
         last = getattr(agent, "last_run", {}) or {}
         log_turn(event.chat_id, text, last.get("tools", []), reply,
                  last.get("escalated", False), ms, last.get("usd", 0.0))
