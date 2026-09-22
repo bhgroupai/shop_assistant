@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 470" width="980" height="470" font-family="ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .card{fill:#ffffff;stroke:#cbd5e1;stroke-width:1.5;rx:10}
+      .t{font-size:14px;fill:#0f172a;font-weight:600}
+      .s{font-size:11.5px;fill:#64748b}
+      .lbl{font-size:11px;fill:#475569;font-style:italic}
+      .ln{stroke:#94a3b8;stroke-width:1.6;fill:none;marker-end:url(#a)}
+      .band{fill:#f1f5f9;stroke:#e2e8f0;stroke-width:1;rx:12}
+      .bandt{font-size:11px;fill:#94a3b8;font-weight:600;letter-spacing:.08em}
+    </style>
+  </defs>
+  <rect x="0" y="0" width="980" height="470" fill="#f8fafc"/>
+
+  <!-- ingestion band -->
+  <rect class="band" x="24" y="46" width="932" height="124"/>
+  <text class="bandt" x="40" y="68">INGESTION — run on demand</text>
+
+  <rect class="card" x="44" y="82" width="176" height="66"/>
+  <text class="t" x="60" y="108">Telegram channel</text>
+  <text class="s" x="60" y="128">photos + shorthand captions</text>
+
+  <rect class="card" x="272" y="82" width="152" height="66"/>
+  <text class="t" x="288" y="108">fetch.py</text>
+  <text class="s" x="288" y="128">user session, incremental</text>
+
+  <rect class="card" x="476" y="82" width="176" height="66"/>
+  <text class="t" x="492" y="108">extract.py</text>
+  <text class="s" x="492" y="128">LLM tool call → records</text>
+
+  <rect class="card" x="704" y="82" width="232" height="66"/>
+  <text class="t" x="720" y="108">products.jsonl · embeddings.npy</text>
+  <text class="s" x="720" y="128">index.py · bge-m3, numpy cosine</text>
+
+  <path class="ln" d="M220 115 H266"/>
+  <path class="ln" d="M424 115 H470"/>
+  <path class="ln" d="M652 115 H698"/>
+
+  <!-- serving band -->
+  <rect class="band" x="24" y="200" width="932" height="244"/>
+  <text class="bandt" x="40" y="222">SERVING — one systemd service</text>
+
+  <rect class="card" x="44" y="242" width="176" height="76"/>
+  <text class="t" x="60" y="268">Customer</text>
+  <text class="s" x="60" y="288">uz-Latin · uz-Cyrillic · ru</text>
+  <text class="s" x="60" y="304">typos welcome</text>
+
+  <rect class="card" x="272" y="242" width="152" height="76"/>
+  <text class="t" x="288" y="268">bot.py</text>
+  <text class="s" x="288" y="288">carousel reply,</text>
+  <text class="s" x="288" y="304">inline ◀ 2/5 ▶</text>
+
+  <rect class="card" x="476" y="242" width="176" height="76"/>
+  <text class="t" x="492" y="268">agent.py</text>
+  <text class="s" x="492" y="288">tool-calling loop,</text>
+  <text class="s" x="492" y="304">no invented numbers</text>
+
+  <rect class="card" x="704" y="242" width="232" height="76"/>
+  <text class="t" x="720" y="268">search.py — 5 tools</text>
+  <text class="s" x="720" y="288">find_products · semantic_search</text>
+  <text class="s" x="720" y="304">latest_posts · search_faq · ask_owner</text>
+
+  <path class="ln" d="M220 272 H266"/>
+  <text class="lbl" x="226" y="264">question</text>
+  <path class="ln" d="M266 300 H224"/>
+  <text class="lbl" x="228" y="316">photo + card</text>
+
+  <path class="ln" d="M424 280 H470"/>
+  <path class="ln" d="M652 280 H698"/>
+  <text class="lbl" x="660" y="272">filters first,</text>
+  <text class="lbl" x="660" y="330">embeddings as fallback</text>
+
+  <path class="ln" d="M820 318 V372 H660"/>
+  <path class="ln" d="M476 372 H316 V322"/>
+  <rect class="card" x="476" y="346" width="176" height="52"/>
+  <text class="t" x="492" y="368">Owner</text>
+  <text class="s" x="492" y="386">replies once → customer</text>
+  <text class="lbl" x="700" y="364">ask_owner</text>
+
+  <rect class="card" x="44" y="346" width="176" height="52"/>
+  <text class="t" x="60" y="368">Local GPU · Ollama</text>
+  <text class="s" x="60" y="386">gemma4:31b · bge-m3 · $0/msg</text>
+  <path class="ln" d="M132 346 V326 H262" />
+</svg>
