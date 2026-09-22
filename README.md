@@ -8,15 +8,7 @@ the customer's own language, and asks the owner when it does not know.
 Runs entirely on a **local GPU** (Ollama): no per-message API cost, no customer data leaving the
 shop's server. Built from scratch — no LangChain, no vector database, no agent framework.
 
-```
-Telegram channel ──fetch──▶ extract (LLM) ──▶ products.jsonl + embeddings.npy
-                                                        │
-                                                    5 tools
-                                                        │
-        customer ◀──── bot (carousel) ──── agent (LLM, tool calling)
-                                                        │
-                                          ask_owner ──▶ owner's Telegram ──reply──▶ customer
-```
+![Architecture: channel → fetch → extract → index; customer → bot → agent → tools, with escalation to the owner](docs/architecture.svg)
 
 ## The problem
 
