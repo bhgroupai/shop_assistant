@@ -9,7 +9,7 @@ Six stages, one Python module each, every module runnable on its own (NFR-7). Da
 ```
  offline (ingest, run by admin)                       online (bot service)
  ─────────────────────────────                        ────────────────────
- @status_dokon                                        customer ⇄ Telegram bot
+ @<channel>                                           customer ⇄ Telegram bot
       │ fetch.py (Telethon, user account)                        │
       ▼                                                          ▼ bot.py
  data/posts.jsonl        raw captions                      agent.py  (Ollama LLM, Tool Runner)
@@ -43,14 +43,14 @@ All files live in `shop_assistant/data/` (gitignored). One JSON object per line.
 
 ### 2.1 `posts.jsonl` — raw, written by fetch.py
 ```json
-{"id": 1234, "date": "2026-09-10T14:02:00", "link": "https://t.me/status_dokon/1234",
+{"id": 1234, "date": "2026-09-10T14:02:00", "link": "https://t.me/example_shop/1234",
  "caption": "🍂Kuz mavsumi uchun🍂\n🔥Yangi model Dvoyka🔥\nRazmer:M.L.XL.2XL.3XL\nNarx:980.000ming\n...",
  "has_media": true}
 ```
 
 ### 2.2 `products.jsonl` — one record per post, written by extract.py
 ```json
-{"id": 1234, "date": "2026-09-10", "link": "https://t.me/status_dokon/1234",
+{"id": 1234, "date": "2026-09-10", "link": "https://t.me/example_shop/1234",
  "name": "Dvoyka", "category": "kiyim",
  "price": 980000, "subscriber_price": null,
  "sizes": ["M","L","XL","2XL","3XL"], "colors": [],
@@ -138,7 +138,7 @@ Thin `@beta_tool` wrappers around §3.5 that return compact text (one line per p
 - Logs every turn to `log.jsonl` (FR-25).
 
 ### 3.9 `config.py`
-`CHANNEL = "status_dokon"`, `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`MODEL = "gemma4:31b"`, `EMBED_MODEL = "bge-m3"`), paths. From env: `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `OLLAMA_URL` (default `http://localhost:11434`). The Anthropic SDK is pointed at Ollama by setting `ANTHROPIC_BASE_URL = OLLAMA_URL` and a dummy `ANTHROPIC_API_KEY`.
+`CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`MODEL = "gemma4:31b"`, `EMBED_MODEL = "bge-m3"`), paths. From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `OLLAMA_URL` (default `http://localhost:11434`). The Anthropic SDK is pointed at Ollama by setting `ANTHROPIC_BASE_URL = OLLAMA_URL` and a dummy `ANTHROPIC_API_KEY`.
 
 ### 3.10 `main.py`
 Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service: admin runs `fetch → extract → index` by hand or cron (FR-23), then sends `/reindex` to the bot (calls `search.reload()`).

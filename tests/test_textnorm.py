@@ -19,7 +19,7 @@ from shop_assistant.textnorm import normalise
     ("двойка", "dvoyka"),
     ("куртка", "kurtka"),                # from CAPTION_KURTKA
     ("қишки", "qishki"),                # from CAPTION_KURTKA
-    ("самарқанд", "samarqand"),          # from FOOTER
+    ("самарқанд", "samarqand"),          # city name
     ("янги", "yangi"),                  # from CAPTION_DVOYKA
     ("нарх", "narx"),                   # from CAPTION_DVOYKA
 ])

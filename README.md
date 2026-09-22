@@ -1,6 +1,6 @@
 # Shop Assistant
 
-Telegram bot that answers customers' "do you have …?" questions about a shop whose catalog is the posts of a Telegram channel (@status_dokon). Filters first, embeddings as fallback, escalates to the owner when unsure. Built from scratch — no agent/RAG frameworks.
+Telegram bot that answers customers' "do you have …?" questions about a shop whose catalog is the posts of a Telegram channel (set `TG_CHANNEL` in `.env`). Filters first, embeddings as fallback, escalates to the owner when unsure. Built from scratch — no agent/RAG frameworks.
 
 - Requirements: `docs/shop_assistant_SRS.md`
 - Design: `docs/shop_assistant_SDD.md`

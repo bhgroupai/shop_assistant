@@ -12,7 +12,7 @@ from shop_assistant import config
 
 CAPTION_DVOYKA = (
     "🍂Kuz mavsumi uchun🍂\n🔥Yangi model Dvoyka🔥\nRazmer:M.L.XL.2XL.3XL\nNarx:980.000ming"
-    "\n\n📍Manzil: Samarqand, Siyob bozori\n📞 +998 90 123 45 67\n@status_dokon\n🚚 Dastavka bor"
+    "\n\n📍Manzil: Shahar markazi\n📞 +998 00 000 00 00\n@example_shop\n🚚 Dastavka bor"
 )
 
 def main():

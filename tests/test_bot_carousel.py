@@ -12,9 +12,9 @@ from shop_assistant.bot import (
 
 INTRO = "Ha, bor. Mana topilganlar:"
 OFFER = "Narxini bilmoqchi bo'lsangiz raqamini yozing"
-LINE1 = "1. Krossovka Nike Air · 350000 · 40,41,42 · 2026-09-12 · https://t.me/status_dokon/983"
-LINE2 = "2. Dvoyka · 980000 · M,L,XL · 2026-09-13 · https://t.me/status_dokon/950"
-LINE3 = "3. Dvoyka · 980000 · M,L,XL,2XL · 2026-09-10 · https://t.me/status_dokon/926"
+LINE1 = "1. Krossovka Nike Air · 350000 · 40,41,42 · 2026-09-12 · https://t.me/example_shop/983"
+LINE2 = "2. Dvoyka · 980000 · M,L,XL · 2026-09-13 · https://t.me/example_shop/950"
+LINE3 = "3. Dvoyka · 980000 · M,L,XL,2XL · 2026-09-10 · https://t.me/example_shop/926"
 REPLY_THREE = "\n".join([INTRO, LINE1, LINE2, LINE3, OFFER])
 NO_RESULTS = "Kechirasiz, bunday mahsulot topilmadi."
 IDS = [983, 950, 926]
@@ -49,20 +49,20 @@ def test_caption_second_item():
 
 
 def test_caption_missing_price_and_sizes():
-    line = "1. Kiyim · narxi: so'rab beraman · - · 2026-08-19 · https://t.me/status_dokon/928"
+    line = "1. Kiyim · narxi: so'rab beraman · - · 2026-08-19 · https://t.me/example_shop/928"
     card = carousel_caption("\n".join([INTRO, line]), 0)
     assert "Narxi: so'rab beraman" in card
     assert "O'lcham" not in card
 
 
 def test_caption_stale_note():
-    line = ("1. Kiyim · narxi: so'rab beraman · - · 2026-06-09 · https://t.me/status_dokon/695 "
+    line = ("1. Kiyim · narxi: so'rab beraman · - · 2026-06-09 · https://t.me/example_shop/695 "
             "(Bu mahsulot eskirgan bo'lishi mumkin, egadan tasdiqlash lozim)")
     card = carousel_caption("\n".join([INTRO, line]), 0)
     assert card.startswith("1. Kiyim\n")
     assert "eskirgan" in card.lower()
     assert "(" not in card
-    card2 = carousel_caption("1. Dvoyka · 980000 · M · 2026-09-10 · https://t.me/status_dokon/926 · [eskirgan]", 0)
+    card2 = carousel_caption("1. Dvoyka · 980000 · M · 2026-09-10 · https://t.me/example_shop/926 · [eskirgan]", 0)
     assert "eskirgan" in card2.lower() and "[" not in card2
 
 
@@ -72,7 +72,7 @@ def test_caption_without_numbered_line_falls_back_to_reply():
 
 
 def test_caption_ten_not_confused_with_one():
-    lines = [f"{i}. Item {i} · 100000 · M · 2026-09-0{i % 9 + 1} · https://t.me/status_dokon/{900 + i}"
+    lines = [f"{i}. Item {i} · 100000 · M · 2026-09-0{i % 9 + 1} · https://t.me/example_shop/{900 + i}"
              for i in range(1, 11)]
     card = carousel_caption("\n".join([INTRO, *lines]), 0)
     assert card.startswith("1. Item 1\n")
@@ -155,4 +155,4 @@ def test_buttons_url_points_to_current_post():
     url_buttons = [b for b in rows[-1] if hasattr(b.type, "url")]
     assert len(url_buttons) == 1
     assert url_buttons[0].text == "Kanalda ko'rish"
-    assert _url(url_buttons[0]).endswith("/status_dokon/950")
+    assert _url(url_buttons[0]).endswith("/example_shop/950")

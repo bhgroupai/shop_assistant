@@ -108,7 +108,7 @@ def test_missing_keywords_key_entirely():
 # --- URL / no-letter names ----------------------------------------------------
 
 def test_url_name_replaced():
-    item = {"name": "https://t.me/status_dokon/123", "keywords": KW_KROSSOVKA}
+    item = {"name": "https://t.me/example_shop/123", "keywords": KW_KROSSOVKA}
     got = product_name(item, "poyabzal", BODY_KROSSOVKA)
     assert "http" not in got and "t.me" not in got
     assert got.startswith("Krossovka")

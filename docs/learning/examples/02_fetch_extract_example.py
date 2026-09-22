@@ -33,7 +33,7 @@ Narxi: 450.000 so'm
 ====================
 Dastavka O'zbekiston bo'ylab bor 📍
 Murojaat uchun: +998901234567
-@status_dokon_admin
+@example_shop_admin
     """.strip()
     
     print("--- RAW POST ---")

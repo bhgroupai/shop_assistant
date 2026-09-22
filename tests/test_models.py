@@ -19,7 +19,7 @@ def test_product_has_every_sdd_field():
 
 
 def test_post_and_faq_defaults():
-    p = Post(id=1, date="2026-09-10T14:02:00", link="https://t.me/status_dokon/1", caption="x")
+    p = Post(id=1, date="2026-09-10T14:02:00", link="https://t.me/example_shop/1", caption="x")
     assert p.has_media is True
     f = FaqEntry(ts="2026-09-16T10:00:00", question="dastavka?", answer="35 ming")
     assert f.post_ids == ()
