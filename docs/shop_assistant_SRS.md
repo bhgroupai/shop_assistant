@@ -54,7 +54,7 @@ Customer ◀──Telegram bot──▶ Agent ──tools───────�
 
 ### 2.4 Constraints
 - C-1 The system is built from scratch for learning purposes: no off-the-shelf agent or RAG framework may be used.
-- C-2 Language model and embeddings run **locally** on the company's own GPU server (Ollama on Codeschool): no paid hosted API. Models must be multilingual (uz-Latin, uz-Cyrillic, ru).
+- C-2 Language model and embeddings run **locally** on the company's own GPU server (Ollama on a GPU server): no paid hosted API. Models must be multilingual (uz-Latin, uz-Cyrillic, ru).
 - C-5 The bot answers only in private chats; it does not respond in groups or the channel.
 - C-3 Runs unattended on a single Linux server.
 - C-4 All catalog data comes from the channel; no manual product entry in v1.

@@ -16,7 +16,7 @@ CAPTION_DVOYKA = (
 )
 
 def main():
-    ollama_url = getattr(config, "OLLAMA_URL", "http://192.168.0.218:11434")
+    ollama_url = getattr(config, "OLLAMA_URL", "http://<gpu-host>:11434")
     model_name = getattr(config, "MODEL", "gemma4:31b")
     
     client = Anthropic(
