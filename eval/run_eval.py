@@ -118,13 +118,14 @@ def _install_capture(tools_mod, capture: _Capture) -> None:
 def _dry_setup():
     import types
     from anthropic import beta_tool
+    from shop_assistant import config
     from shop_assistant.models import Product
 
     catalog = [
-        Product(id=1300, date="2026-09-12", link="https://t.me/status_dokon/1300", name="Krossovka Nike Air",
+        Product(id=1300, date="2026-09-12", link=f"https://t.me/{config.CHANNEL}/1300", name="Krossovka Nike Air",
                 category="poyabzal", price=350000, subscriber_price=320000, sizes=("40", "41", "42", "43"),
                 keywords=("krossovka", "sneakers", "nike"), body="Krossovka Nike Air"),
-        Product(id=1234, date="2026-09-10", link="https://t.me/status_dokon/1234", name="Dvoyka",
+        Product(id=1234, date="2026-09-10", link=f"https://t.me/{config.CHANNEL}/1234", name="Dvoyka",
                 category="kiyim", price=980000, subscriber_price=None, sizes=("M", "L", "XL", "2XL"),
                 keywords=("dvoyka", "kostyum"), body="Yangi model Dvoyka"),
     ]

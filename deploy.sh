@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Deploy shop_assistant to the codeschool server as a user-level systemd service (ticket #15).
+# Deploy shop_assistant to the GPU server (ssh alias in DEPLOY_HOST) as a user-level systemd service (ticket #15).
 # Usage: ./deploy.sh [--data]     --data also syncs data/ (products, embeddings, faq, log)
 set -euo pipefail
 
-HOST=codeschool
+HOST=${DEPLOY_HOST:-gpu-host}   # ssh alias of the GPU server
 DEST='~/shop_assistant'
 UNIT=shop-assistant.service
 SYNC_DATA=0

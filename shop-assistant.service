@@ -3,7 +3,7 @@
 #          && systemctl --user enable --now shop-assistant
 # Needs `loginctl enable-linger $USER` once so the unit survives logout.
 [Unit]
-Description=Shop Assistant Telegram bot (status_dokon)
+Description=Shop Assistant Telegram bot
 After=network-online.target
 Wants=network-online.target
 

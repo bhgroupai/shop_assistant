@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CHANNEL = "status_dokon"
+CHANNEL = os.environ.get("TG_CHANNEL", "")   # shop channel username without @; set in .env
 STALE_DAYS = 60            # FR-16
 MAX_RESULTS = 5            # FR-18
 FETCH_LIMIT = 500          # FR-1
@@ -37,7 +37,7 @@ STATE_PATH = DATA_DIR / "state.json"
 LOG_PATH = DATA_DIR / "log.jsonl"
 
 # Secrets — read lazily so importing config never fails without .env (NFR-6).
-ENV_KEYS = ("TG_API_ID", "TG_API_HASH", "TG_BOT_TOKEN", "TG_OWNER_ID")
+ENV_KEYS = ("TG_CHANNEL", "TG_API_ID", "TG_API_HASH", "TG_BOT_TOKEN", "TG_OWNER_ID")
 
 # The Anthropic SDK talks to Ollama's Anthropic-compatible endpoint; no real key needed.
 os.environ.setdefault("ANTHROPIC_BASE_URL", OLLAMA_URL)

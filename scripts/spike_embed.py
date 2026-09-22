@@ -13,7 +13,7 @@ from ollama import Client
 from shop_assistant import config
 from shop_assistant.textnorm import normalise
 def main():
-    ollama_url = getattr(config, "OLLAMA_URL", "http://192.168.0.218:11434")
+    ollama_url = getattr(config, "OLLAMA_URL", "http://<gpu-host>:11434")
     embed_model = getattr(config, "EMBED_MODEL", "bge-m3")
 
     print(f"Using Ollama URL: {ollama_url}")

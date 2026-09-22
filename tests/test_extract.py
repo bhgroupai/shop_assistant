@@ -7,7 +7,7 @@ from tests.conftest import CAPTION_DVOYKA, CAPTION_KROSSOVKA
 
 def test_strip_footer_removes_contact_lines_and_emoji():
     body = strip_footer(CAPTION_DVOYKA)
-    assert "998" not in body and "@status_dokon" not in body and "Manzil" not in body
+    assert "998" not in body and "@example_shop" not in body and "Manzil" not in body
     assert "🍂" not in body and "🔥" not in body
     assert "Dvoyka" in body and "980.000" in body
 

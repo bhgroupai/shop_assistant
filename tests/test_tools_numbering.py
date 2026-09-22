@@ -88,10 +88,10 @@ def test_stale_tag_stays_at_end_of_line(products):
 
 def test_ten_products_reach_number_ten(products):
     base = products[0]
-    ten = [dataclasses.replace(base, id=2000 + i, link=f"https://t.me/status_dokon/{2000 + i}")
+    ten = [dataclasses.replace(base, id=2000 + i, link=f"https://t.me/example_shop/{2000 + i}")
            for i in range(10)]
     lines = _lines(format_products(ten))
     assert len(lines) == 10
     assert lines[9].startswith("10. ")
-    assert "https://t.me/status_dokon/2009" in lines[9]
+    assert "https://t.me/example_shop/2009" in lines[9]
     assert lines[0].startswith("1. ") and not lines[0].startswith("10. ")

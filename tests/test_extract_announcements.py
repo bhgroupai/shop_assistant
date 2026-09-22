@@ -5,12 +5,12 @@ from tests.conftest import FOOTER
 
 
 def _post(caption: str, has_media: bool) -> Post:
-    return Post(id=695, date="2026-06-09T11:04:04", link="https://t.me/status_dokon/695",
+    return Post(id=695, date="2026-06-09T11:04:04", link="https://t.me/example_shop/695",
                 caption=caption, has_media=has_media)
 
 
 def test_bare_username_post_is_announcement():
-    p = _post("@Shaxzodakh", has_media=False)
+    p = _post("@example_admin", has_media=False)
     assert is_announcement(p, strip_footer(p.caption), None, ())
 
 

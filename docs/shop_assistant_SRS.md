@@ -45,7 +45,7 @@ Customer ◀──Telegram bot──▶ Agent ──tools───────�
 - **Admin** — triggers re-indexing, reads logs and stats.
 
 ### 2.3 Assumptions
-- A-1 The channel is @status_dokon (clothing and shoes, Tashkent, nationwide delivery); it is public.
+- A-1 The channel is the shop's public Telegram channel (clothing and shoes, nationwide delivery), configured per deployment; it is public.
 - A-2 Posts follow a stable caption template: season tag, "Yangi model <type>", sizes line, price line, delivery note, contacts, address. At least 15 of any 20 recent posts contain a readable type, sizes and price.
 - A-3 One post = one product. Multi-product posts are indexed as one record with several keywords.
 - A-4 In v1 the developer acts as the owner and receives escalations in their own Telegram account.
@@ -54,7 +54,7 @@ Customer ◀──Telegram bot──▶ Agent ──tools───────�
 
 ### 2.4 Constraints
 - C-1 The system is built from scratch for learning purposes: no off-the-shelf agent or RAG framework may be used.
-- C-2 Language model and embeddings run **locally** on the company's own GPU server (Ollama on Codeschool): no paid hosted API. Models must be multilingual (uz-Latin, uz-Cyrillic, ru).
+- C-2 Language model and embeddings run **locally** on the company's own GPU server (Ollama on a GPU server): no paid hosted API. Models must be multilingual (uz-Latin, uz-Cyrillic, ru).
 - C-5 The bot answers only in private chats; it does not respond in groups or the channel.
 - C-3 Runs unattended on a single Linux server.
 - C-4 All catalog data comes from the channel; no manual product entry in v1.
@@ -146,4 +146,4 @@ Customer ◀──Telegram bot──▶ Agent ──tools───────�
 | 0.1 | 2026-09-16 | Initial draft |
 | 0.3 | 2026-09-16 | Q-2…Q-5 closed: developer plays owner (A-4), Voyage embeddings (C-2), private chats only (C-5), 60-day threshold (FR-16) |
 | 0.4 | 2026-09-17 | C-2: local models (Ollama on own GPU server) instead of Claude + Voyage; NFR-2/NFR-3 cost limits replaced by token/time limits |
-| 0.2 | 2026-09-16 | Channel chosen (@status_dokon); assumptions A-1/A-2/A-5/A-6 and FR-3a/3b added from sample posts; Q-1 closed |
+| 0.2 | 2026-09-16 | Channel chosen (the shop channel); assumptions A-1/A-2/A-5/A-6 and FR-3a/3b added from sample posts; Q-1 closed |

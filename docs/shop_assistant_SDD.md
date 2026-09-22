@@ -9,7 +9,7 @@ Six stages, one Python module each, every module runnable on its own (NFR-7). Da
 ```
  offline (ingest, run by admin)                       online (bot service)
  ─────────────────────────────                        ────────────────────
- @status_dokon                                        customer ⇄ Telegram bot
+ @<channel>                                           customer ⇄ Telegram bot
       │ fetch.py (Telethon, user account)                        │
       ▼                                                          ▼ bot.py
  data/posts.jsonl        raw captions                      agent.py  (Ollama LLM, Tool Runner)
@@ -29,9 +29,9 @@ Six stages, one Python module each, every module runnable on its own (NFR-7). Da
 | Language | Python 3.11+ | same as the rest of the repo |
 | Telegram, channel history | Telethon **user account** | bots cannot read channel history; session pattern reused from `telegram_digest/tgclient.py` |
 | Telegram, customers + owner | Telethon **bot account** (BotFather token) | customers must not talk to a personal account; bot can message the owner; pattern from `telegram_digest/approval.py` |
-| LLM | **Ollama** on the Codeschool GPU server (RTX 5090), model `gemma4:31b` (tool calling), called through the Anthropic SDK's Anthropic-compatible endpoint (`ANTHROPIC_BASE_URL` → Ollama) with `client.beta.messages.tool_runner` | C-2; same agent loop as `telegram_digest/agent.py` |
+| LLM | **Ollama** on a GPU server (RTX 5090), model `gemma4:31b` (tool calling), called through the Anthropic SDK's Anthropic-compatible endpoint (`ANTHROPIC_BASE_URL` → Ollama) with `client.beta.messages.tool_runner` | C-2; same agent loop as `telegram_digest/agent.py` |
 | Embeddings | **Ollama** `bge-m3` (multilingual, 1024-d) via the `ollama` Python client, same server | C-2; covers uz-Latin / uz-Cyrillic / ru |
-| Reaching Ollama | On the office LAN `http://192.168.0.218:11434`; elsewhere `ssh -N -L 11434:localhost:11434 codeschool` then `http://localhost:11434`; on the server itself `localhost` | no auth on the API — never expose it publicly |
+| Reaching Ollama | On the same LAN `http://<gpu-host>:11434`; elsewhere `ssh -N -L 11434:localhost:11434 <gpu-host>` then `http://localhost:11434`; on the server itself `localhost` | no auth on the API — never expose it publicly |
 | Vector store | `numpy` array + cosine similarity | ≤ a few thousand posts; a DB adds nothing to learn yet |
 | Storage | JSONL files under `data/` | greppable, diffable, restart-safe (FR-6) |
 | Secrets | `.env` via `python-dotenv` | NFR-6 |
@@ -43,14 +43,14 @@ All files live in `shop_assistant/data/` (gitignored). One JSON object per line.
 
 ### 2.1 `posts.jsonl` — raw, written by fetch.py
 ```json
-{"id": 1234, "date": "2026-09-10T14:02:00", "link": "https://t.me/status_dokon/1234",
+{"id": 1234, "date": "2026-09-10T14:02:00", "link": "https://t.me/example_shop/1234",
  "caption": "🍂Kuz mavsumi uchun🍂\n🔥Yangi model Dvoyka🔥\nRazmer:M.L.XL.2XL.3XL\nNarx:980.000ming\n...",
  "has_media": true}
 ```
 
 ### 2.2 `products.jsonl` — one record per post, written by extract.py
 ```json
-{"id": 1234, "date": "2026-09-10", "link": "https://t.me/status_dokon/1234",
+{"id": 1234, "date": "2026-09-10", "link": "https://t.me/example_shop/1234",
  "name": "Dvoyka", "category": "kiyim",
  "price": 980000, "subscriber_price": null,
  "sizes": ["M","L","XL","2XL","3XL"], "colors": [],
@@ -138,7 +138,7 @@ Thin `@beta_tool` wrappers around §3.5 that return compact text (one line per p
 - Logs every turn to `log.jsonl` (FR-25).
 
 ### 3.9 `config.py`
-`CHANNEL = "status_dokon"`, `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`MODEL = "gemma4:31b"`, `EMBED_MODEL = "bge-m3"`), paths. From env: `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `OLLAMA_URL` (default `http://localhost:11434`). The Anthropic SDK is pointed at Ollama by setting `ANTHROPIC_BASE_URL = OLLAMA_URL` and a dummy `ANTHROPIC_API_KEY`.
+`CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`MODEL = "gemma4:31b"`, `EMBED_MODEL = "bge-m3"`), paths. From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `OLLAMA_URL` (default `http://localhost:11434`). The Anthropic SDK is pointed at Ollama by setting `ANTHROPIC_BASE_URL = OLLAMA_URL` and a dummy `ANTHROPIC_API_KEY`.
 
 ### 3.10 `main.py`
 Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service: admin runs `fetch → extract → index` by hand or cron (FR-23), then sends `/reindex` to the bot (calls `search.reload()`).
@@ -198,7 +198,7 @@ shop_assistant/                   # repo root; run everything from here
 ## 7. Risks
 - Ollama swaps models on demand and only one ~19 GB model fits the GPU at a time: alternating `gemma4:31b` and `bge-m3` calls costs seconds per swap → ingestion embeds in one pass after extraction; the bot calls embed only on the semantic fallback.
 - `gemma4:31b` tool calling through the Anthropic-compatible endpoint (forced `tool_choice`) is unverified → ticket #3 spike checks it before #5/#10.
-- Deploy target is the Codeschool server itself so Ollama is `localhost`.
+- Deploy target is the GPU server itself so Ollama is `localhost`.
 - Category list too narrow → `boshqa` bucket; review after first extract run.
 - Customer sends a photo/voice only → agent gets `<media>`; reply asking for text (v1), photo search is out of scope.
 - Owner forgets to *reply* to the `#esc` message → bot answers the owner with a hint.
@@ -211,4 +211,4 @@ shop_assistant/                   # repo root; run everything from here
 | 0.3 | 2026-09-17 | §5: tests per ticket live on the ticket branch (senior-written), `main` keeps only merged tests; CI added |
 | 0.5 | 2026-09-17 | Spike #3 results: embed normalised text (§3.3, §3.5, D-3); `max_tokens ≥ 1000` for extraction (§3.2) |
 | 0.6 | 2026-09-21 | S4: §3.8 carousel reply (D-8); §3.2 product names = type + brand (`product_name` guard) and announcements → `boshqa` (`is_announcement`); §3.5 search excludes `boshqa` (D-9); tools number results, `narxi: so'rab beraman` + offer line (#21) |
-| 0.4 | 2026-09-17 | SRS C-2 v0.4: Claude + Voyage replaced by Ollama on the Codeschool GPU server (`gemma4:31b`, `bge-m3`); §1.1, §3.2, §3.3, §3.7, §3.9, §7 updated; deploy target = Codeschool |
+| 0.4 | 2026-09-17 | SRS C-2 v0.4: Claude + Voyage replaced by Ollama on the GPU server (`gemma4:31b`, `bge-m3`); §1.1, §3.2, §3.3, §3.7, §3.9, §7 updated; deploy target = the GPU server |

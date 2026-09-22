@@ -12,6 +12,6 @@ def test_log_turn_record_shape(tmp_path, monkeypatch):
     from shop_assistant import config
     monkeypatch.setattr(config, "LOG_PATH", tmp_path / "log.jsonl")
     rec = log_turn(4242, "krossovka 42", [{"name": "find_products", "input": {"size": "42"}, "n_results": 1}],
-                   "Ha, bor: https://t.me/status_dokon/1300", False, 1200, 0.004)
+                   "Ha, bor: https://t.me/example_shop/1300", False, 1200, 0.004)
     assert set(rec) >= {"ts", "chat_id", "question", "tools", "answer", "escalated", "ms", "usd"}
     assert (tmp_path / "log.jsonl").read_text().count("\n") == 1

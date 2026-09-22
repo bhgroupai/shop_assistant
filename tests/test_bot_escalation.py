@@ -3,7 +3,7 @@ from shop_assistant.bot import format_escalation, parse_esc_header
 
 
 def test_escalation_header_roundtrip():
-    msg = format_escalation(4242, "krossovka 42 bormi?", ["https://t.me/status_dokon/1300"])
+    msg = format_escalation(4242, "krossovka 42 bormi?", ["https://t.me/example_shop/1300"])
     assert msg.startswith("#esc 4242\n")
     assert parse_esc_header(msg) == 4242
 

@@ -40,7 +40,7 @@ def test_find_products_color(products):
 def test_find_products_marks_stale_and_keeps_link_date(products):
     got = find_products(keywords=["kurtka"], products=products)
     assert len(got) == 1 and got[0].stale is True
-    assert got[0].link.startswith("https://t.me/status_dokon/") and got[0].date   # FR-11
+    assert got[0].link.startswith("https://t.me/example_shop/") and got[0].date   # FR-11
 
 
 def test_find_products_limit_and_newest_first(products):
@@ -60,7 +60,7 @@ def test_latest_posts(products):
 
 def _announcement(products):
     import dataclasses
-    return dataclasses.replace(products[0], id=695, link="https://t.me/status_dokon/695",
+    return dataclasses.replace(products[0], id=695, link="https://t.me/example_shop/695",
                                name="Boshqa", category="boshqa", price=None, sizes=(),
                                keywords=("kiyim", "yengi kolleksiya"), body="Yengi kolleksiya")
 
