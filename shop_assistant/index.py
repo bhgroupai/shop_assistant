@@ -15,6 +15,7 @@ from shop_assistant.textnorm import normalise
 
 _RETRIES = 3
 _RETRY_SLEEP = 1.0   # seconds
+RETRIES = 4          # ticket #23.5: attempts per batch when embed(..., retry=True) (index CLI only)
 
 
 def product_text(p: Product) -> str:
@@ -36,15 +37,18 @@ def _embed_chunk(client: "ollama.Client", chunk: list[str]) -> list[list[float]]
     raise last
 
 
-def embed(texts: list[str]) -> np.ndarray:
-    """Ollama /api/embed with config.EMBED_MODEL at config.OLLAMA_URL, batches of config.EMBED_BATCH → float32[N, D]."""
-    if not texts:
-        return np.zeros((0, 0), dtype=np.float32)
-    client = ollama.Client(host=config.OLLAMA_URL)
-    rows: list[list[float]] = []
-    for start in range(0, len(texts), config.EMBED_BATCH):
-        rows.extend(_embed_chunk(client, texts[start:start + config.EMBED_BATCH]))
-    return np.asarray(rows, dtype=np.float32)
+def embed(texts: list[str], kind: str = "document", *, retry: bool = False) -> np.ndarray:
+    """Gemini embeddings (ticket #23.5) → float32[N, config.EMBED_DIM], every row L2-normalised.
+
+    One `llm.client().models.embed_content(model=config.EMBED_MODEL, contents=<list of str>,
+    config=types.EmbedContentConfig(task_type=..., output_dimensionality=config.EMBED_DIM))` per batch of
+    config.EMBED_BATCH texts; task_type RETRIEVAL_DOCUMENT for kind="document", RETRIEVAL_QUERY for
+    kind="query"; any other kind → ValueError. Empty `texts` → (0, EMBED_DIM) array, no request.
+    retry=False (query path): one attempt, SDK errors propagate. retry=True (index CLI / reindex): transient
+    errors (429, 5xx, timeouts) are retried up to RETRIES attempts per batch with growing time.sleep;
+    an invalid key (400) is never retried; the last error is raised when attempts run out.
+    """
+    raise NotImplementedError("ticket #23.5")
 
 
 def _parse_product(d: dict) -> Product:

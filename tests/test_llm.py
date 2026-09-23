@@ -43,8 +43,9 @@ def _walk(node):
             yield from _walk(v)
 
 
-def _anthropic_dicts():
-    return [t.to_dict() for t in TOOLS]
+def _tool_dicts():
+    return [copy.deepcopy({"name": t.name, "description": t.description, "input_schema": t.input_schema})
+            for t in TOOLS]
 
 
 # --- tool_declarations -------------------------------------------------------
@@ -100,10 +101,10 @@ def test_declarations_are_accepted_by_google_genai():
 
 
 def test_tools_are_not_mutated():
-    before_tools, before_extract = _anthropic_dicts(), copy.deepcopy(_TOOL)
+    before_tools, before_extract = _tool_dicts(), copy.deepcopy(_TOOL)
     llm.tool_declarations(TOOLS)
     llm.tool_declarations([_TOOL])
-    assert _anthropic_dicts() == before_tools
+    assert _tool_dicts() == before_tools
     assert _TOOL == before_extract
 
 
