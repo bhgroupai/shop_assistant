@@ -9,7 +9,11 @@ from google import genai  # noqa: F401  (tests patch `llm.genai.Client`)
 
 from shop_assistant import config
 
-AGENT_TIMEOUT_S = 15       # per customer-agent request
+AGENT_TIMEOUT_S = 8        # per customer-agent request; one retry on 5xx/timeout in agent.py (#26)
+# The SDK turns the client timeout into the X-Server-Timeout header, and the Gemini API rejects a
+# deadline under 10 s (400 "Minimum allowed deadline is 10s"). Requests with a shorter client
+# timeout send this header explicitly; the client still gives up after AGENT_TIMEOUT_S (#26).
+SERVER_DEADLINE_S = 10
 EXTRACT_TIMEOUT_S = 90     # per extraction request (a batch of captions takes longer)
 
 _client = None             # cached genai.Client, created on first use by client()
