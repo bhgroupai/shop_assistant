@@ -1,6 +1,6 @@
 # Software Design Description — Shop Assistant
 
-Version 0.7 · 2026-09-23 · Status: draft · Implements: shop_assistant_SRS.md v0.5
+Version 1.0 · 2026-09-23 · Status: draft · Implements: shop_assistant_SRS.md v0.5
 
 ## 1. Overview
 
@@ -16,9 +16,9 @@ Six stages, one Python module each, every module runnable on its own (NFR-7). Da
       │ extract.py (Gemini)                                     │ tools.py
       ▼                                                         ├─ find_products ─┐
  data/products.jsonl     structured records ◀───────────────────┤                 │ search.py
-      │ index.py (Ollama)                                       ├─ semantic_search┘
+      │ index.py (Gemini embed)                                 ├─ semantic_search┘
       ▼                                                         ├─ latest_posts
- data/embeddings.npy + data/embeddings_ids.json ◀───────────────┤
+ data/embeddings.npy + _ids.json + _meta.json ◀─────────────────┤
                                                                 ├─ search_faq ──▶ data/faq.jsonl
                                                                 └─ ask_owner ───▶ owner (same bot) ──reply──▶ customer
 ```
@@ -30,8 +30,7 @@ Six stages, one Python module each, every module runnable on its own (NFR-7). Da
 | Telegram, channel history | Telethon **user account** | bots cannot read channel history; session pattern reused from `telegram_digest/tgclient.py` |
 | Telegram, customers + owner | Telethon **bot account** (BotFather token) | customers must not talk to a personal account; bot can message the owner; pattern from `telegram_digest/approval.py` |
 | LLM | **Gemini API, free tier** (hosted by Google), a Flash model (`config.GEMINI_MODEL`) with function calling, through the official `google-genai` SDK. One shared client in `llm.py`, created lazily from `GEMINI_API_KEY`. The Anthropic SDK cannot be used: Gemini has no Anthropic-compatible endpoint | C-2 v0.5: no local models; removes the cold model load (54 s) and the GPU dependency. Privacy trade-off: questions and captions go to Google (SRS C-2) |
-| Embeddings | **Ollama** `bge-m3` (multilingual, 1024-d) via the `ollama` Python client, same server — until #23.5 moves them to Gemini too | covers uz-Latin / uz-Cyrillic / ru |
-| Reaching Ollama (embeddings only, until #23.5) | On the same LAN `http://<gpu-host>:11434`; elsewhere `ssh -N -L 11434:localhost:11434 <gpu-host>` then `http://localhost:11434`; on the server itself `localhost` | no auth on the API — never expose it publicly |
+| Embeddings | **Gemini embedding API** (`config.EMBED_MODEL = gemini-embedding-001`, `EMBED_DIM = 768`) through the same `llm.client()` and `GEMINI_API_KEY` (#23.5) | covers uz-Latin / uz-Cyrillic / ru (spike 2026-09-23: spelling variants ≥ 0.96 normalised); no local model left, so any host with Python can run the bot and the ingest |
 | Vector store | `numpy` array + cosine similarity | ≤ a few thousand posts; a DB adds nothing to learn yet |
 | Storage | JSONL files under `data/` | greppable, diffable, restart-safe (FR-6) |
 | Secrets | `.env` via `python-dotenv` | NFR-6 |
@@ -62,7 +61,7 @@ All files live in `shop_assistant/data/` (gitignored). One JSON object per line.
 - `keywords` are produced by the LLM in four scripts/languages (FR-4) and stored already **normalised** (§4.2).
 
 ### 2.3 `embeddings.npy` + `embeddings_ids.json`
-`float32[N, D]` matrix, row *i* belongs to post `ids[i]`. Both rewritten together by index.py.
+`float32[N, D]` matrix (rows L2-normalised), row *i* belongs to post `ids[i]`. Next to them `embeddings_meta.json` = `{"model", "dim", "n"}` records which embedding model built the matrix. All three rewritten together by index.py; vectors from two models are never mixed (§3.5 load guard).
 
 ### 2.4 `faq.jsonl` — owner answers, appended by bot.py (FR-22)
 ```json
@@ -94,9 +93,10 @@ FAQ entries are embedded too (separate `faq_embeddings.npy`), so `search_faq` is
 - CLI: `python -m shop_assistant.extract` processes posts not yet in `products.jsonl`.
 
 ### 3.3 `index.py` — FR-5, FR-6
-- `embed(texts: list[str]) -> np.ndarray` — Ollama `/api/embed` with `config.EMBED_MODEL`, batches of `config.EMBED_BATCH`; `bge-m3` needs no query/document prefix.
-- **Embed the normalised text**: `embed([normalise(product_text(p)) …])`. Spike #3 measured `bge-m3` cross-script raw at 0.62–0.67 (`krossovka`/`кроссовка`) but 0.87 after transliteration — so D-3 applies to embeddings too, not only to keywords.
-- Embeds `name + " " + body + " " + " ".join(keywords)` per product; rewrites `embeddings.npy` / `embeddings_ids.json` for all products (cheap at this size; simpler than patching rows).
+- `embed(texts, kind="document", *, retry=False) -> float32[N, EMBED_DIM]` — Gemini `models.embed_content` through `llm.client()` with `config.EMBED_MODEL` and `output_dimensionality = config.EMBED_DIM`, one request per batch of `config.EMBED_BATCH` (≤ 100 texts, the API limit). Task type: `RETRIEVAL_DOCUMENT` for products / FAQ answers (`kind="document"`), `RETRIEVAL_QUERY` for the customer's query (`kind="query"`). Rows are L2-normalised (reduced dimensions are not unit length).
+- Errors: `retry=True` (index CLI only, offline) retries 429 / 5xx / timeouts up to `index.RETRIES` attempts per batch with growing sleeps; an invalid key is never retried. `retry=False` (query path) makes one attempt and lets the error propagate to `search.semantic_search`.
+- **Embed the normalised text**: `embed([normalise(product_text(p)) …])`. Spike #3 measured the old local model cross-script raw at 0.62–0.67 (`krossovka`/`кроссовка`) but 0.87 after transliteration — so D-3 applies to embeddings too, not only to keywords. `scripts/spike_gemini_embed.py` (2026-09-23) repeats it for Gemini: see D-3.
+- Embeds `name + " " + body + " " + " ".join(keywords)` per product; rewrites `embeddings.npy` / `embeddings_ids.json` / `embeddings_meta.json` for all products (cheap at this size; simpler than patching rows). If embedding fails, none of the files is touched.
 - Same for `faq.jsonl` → `faq_embeddings.npy`.
 - CLI: `python -m shop_assistant.index`.
 
@@ -107,17 +107,19 @@ FAQ entries are embedded too (separate `faq_embeddings.npy`), so `search_faq` is
 ### 3.5 `search.py` — FR-8, FR-10, FR-11, FR-12
 ```python
 def find_products(category=None, min_price=None, max_price=None, size=None, color=None, keywords=None, limit=5) -> list[Product]
-def semantic_search(text, max_price=None, limit=5) -> list[Product]     # embed(normalise(text)), cosine, then price filter
+def semantic_search(text, max_price=None, limit=5) -> list[Product]     # embed([normalise(text)], kind="query"), cosine, then price filter
 def latest_posts(n=5) -> list[Product]
 def search_faq(text, limit=3) -> list[FaqEntry]
 ```
 - Filters are ANDed; `keywords` matches if **any** normalised customer keyword is a substring of any normalised product keyword or of `normalise(name)`.
 - Every returned product carries `link`, `date`, and `stale: bool` (`date` older than `config.STALE_DAYS = 60`, FR-16).
 - Loads `products.jsonl` + `.npy` once at import; `reload()` for the admin re-index command.
+- **Model guard (#23.5):** `_load_matrix()` uses the matrix only when `embeddings_meta.json` exists with `model == config.EMBED_MODEL`, `dim == config.EMBED_DIM` and the matrix is `N × EMBED_DIM`. Otherwise (e.g. an old 1024-d matrix without meta) it logs one ERROR naming the stored model / dimension and semantic search is off until re-index; filters keep working.
+- **Fail fast on the query path:** if the query embedding fails (429, 5xx, timeout, invalid or missing key) `semantic_search` returns `[]` with one WARNING and never raises; the agent carries on as on any empty search (filters or `ask_owner`).
 - CLI: `python -m shop_assistant.search "krosovka 42"` prints both filter and semantic results (FR-24).
 
 ### 3.6 `tools.py` — the agent's interface
-Thin `@beta_tool` wrappers around §3.5 that return compact text (one line per product: `name · price · sizes · date · link · [eskirgan]`), plus:
+Thin wrappers around §3.5, declared with the plain `tools.tool` decorator (no SDK dependency): each `TOOLS` entry has `name`, `description` and `input_schema` built from the function signature and its docstring (`Args:` section), plus `call(args) -> str`. `llm.tool_declarations` turns them into Gemini function declarations. They return compact text (one line per product: `name · price · sizes · date · link · [eskirgan]`), plus:
 - `ask_owner(question: str, post_ids: list[int]) -> str` — calls `bot.escalate(...)` through `run_coroutine_threadsafe` (same thread-bridge as `tgclient.run`). Returns `"forwarded"`.
 
 ### 3.7 `agent.py` — FR-13…FR-18, FR-20
@@ -143,7 +145,7 @@ Thin `@beta_tool` wrappers around §3.5 that return compact text (one line per p
 - Logs every turn to `log.jsonl` (FR-25).
 
 ### 3.9 `config.py`
-`CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`GEMINI_MODEL` for the agent, `GEMINI_EXTRACT_MODEL` for extraction — free-tier Flash models; measured limits written next to them; `EMBED_MODEL = "bge-m3"` until #23.5), `MAX_ITERATIONS = 8`, paths. From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `GEMINI_API_KEY` (read lazily with `secret()`), `OLLAMA_URL` (default `http://localhost:11434`, embeddings only). `llm.py` holds the shared Gemini client, `tool_declarations()` and the timeouts.
+`CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`GEMINI_MODEL` for the agent, `GEMINI_EXTRACT_MODEL` for extraction — free-tier Flash models; measured limits written next to them; `EMBED_MODEL = "gemini-embedding-001"`, `EMBED_DIM = 768`, `EMBED_BATCH = 100`), `MAX_ITERATIONS = 8`, paths (incl. `EMBEDDINGS_META_PATH`). From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `GEMINI_API_KEY` (read lazily with `secret()`). `llm.py` holds the shared Gemini client, `tool_declarations()` and the timeouts.
 
 ### 3.10 `main.py`
 Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service: admin runs `fetch → extract → index` by hand or cron (FR-23), then sends `/reindex` to the bot (calls `search.reload()`).
@@ -154,7 +156,7 @@ Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service:
 |---|---|---|---|
 | D-1 | Filters first, embeddings as fallback | embeddings only | numbers (size 42, ≤ 200k) embed badly; also the teaching point of the project |
 | D-2 | Structured extraction with forced tool-use JSON | regex on captions | template drifts; the LLM handles "980.000ming", "Telegram obunachilariga narx", missing lines |
-| D-3 | Normalise scripts at index *and* query time — for keywords **and** for the text that gets embedded | fuzzy matching at query time; raw-text embeddings | one cheap deterministic function, testable in isolation; spike #3: `bge-m3` cross-script similarity 0.62 raw → 0.87 normalised |
+| D-3 | Normalise scripts at index *and* query time — for keywords **and** for the text that gets embedded | fuzzy matching at query time; raw-text embeddings | one cheap deterministic function, testable in isolation; spike #3: `bge-m3` cross-script similarity 0.62 raw → 0.87 normalised; still applies on Gemini (#23.5): `gemini-embedding-001` 768-d, spelling variants of krossovka 0.91–0.96 raw → 0.96–1.00 normalised |
 | D-4 | Rewrite the whole embedding matrix on index | patch rows | N is small; correctness over cleverness |
 | D-5 | Owner replies via Telegram "reply to" the escalation message | inline buttons / commands | zero UI to build; the quoted `#esc <id>` header carries the routing |
 | D-6 | Conversation history in memory only | persist per customer | NFR-4 privacy; restart loses only the current chat context |
@@ -201,7 +203,8 @@ shop_assistant/                   # repo root; run everything from here
 | AC-6 | restart service, confirm `search.py` loads from disk without network |
 
 ## 7. Risks
-- Ollama swaps models on demand and only one ~19 GB model fits the GPU at a time: alternating `gemma4:31b` and `bge-m3` calls costs seconds per swap → ingestion embeds in one pass after extraction; the bot calls embed only on the semantic fallback.
+- Embeddings and the matrix must come from the same model: deploying new code without re-indexing (or the reverse) turns semantic search off (load guard, §3.5) → deploy code and the rebuilt `data/embeddings*` together.
+- Embedding free quota (measured 2026-09-23): 100 embed requests/minute per model, and every text in a batch counts as one → a 134-product re-index needs ~2 minutes of retries, and while it runs customer query embeddings can hit 429 (semantic search then returns nothing for that turn; filters still work).
 - The free-tier quota is per project per day and shared by customers, extraction, eval and development → the bot answers "try again later" when it runs out; watch `log.jsonl` for 429s; use a separate AI Studio key for development.
 - On the free tier Google may use prompts to improve its products (SRS C-2 privacy trade-off).
 - A stronger hosted model may be more eager to fill in numbers → watch the eval's `invented` count, not only `correct`.
@@ -220,4 +223,5 @@ shop_assistant/                   # repo root; run everything from here
 | 0.8 | 2026-09-23 | SRS v0.5 C-2 (#23): no local models — agent and extraction on a Gemini free-tier model via `google-genai`; new `llm.py` (client, tool-schema conversion, timeouts); §1.1, §3.2, §3.7, §3.9, §7 updated; embeddings stay on Ollama until #23.5 |
 | 0.9 | 2026-09-23 | #23 live results: two models — `GEMINI_MODEL = gemini-3.5-flash-lite` for the agent (15 req/min free, 0.8 s, 10/10 tool calls; flash models allow only 5 req/min), `GEMINI_EXTRACT_MODEL = gemini-3.5-flash` for extraction (fewer mis-categorised items than lite); `EXTRACT_BATCH = 20` (5/10/20 all valid); price regex needs one separator per number ("630.000 399.000" is two prices); eval 19/20, 0 invented, median 2.5 s |
 | 0.7 | 2026-09-23 | #17: owner `/stats` (indexed posts, last index, questions/escalations today, `Gemini: N / GEMINI_DAILY_LIMIT today` from `log.jsonl` + `gemini_ingest.jsonl`) and `/reindex` (`search.reload()`); §2.6 `log.jsonl` gains `llm_calls`; `run()` dispatches through `bot.route` |
+| 1.0 | 2026-09-23 | #23.5: embeddings on the Gemini API (`gemini-embedding-001`, 768-d, `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY` task types, L2-normalised, batches ≤ 100); `embeddings_meta.json` + load guard against mixed models; query path fails fast (empty + WARNING), index CLI retries; tools are plain definitions (no Anthropic SDK); Ollama and `bge-m3` gone; §1, §1.1, §2.3, §3.3, §3.5, §3.6, §3.9, D-3, §7 updated |
 | 0.4 | 2026-09-17 | SRS C-2 v0.4: Claude + Voyage replaced by Ollama on the GPU server (`gemma4:31b`, `bge-m3`); §1.1, §3.2, §3.3, §3.7, §3.9, §7 updated; deploy target = the GPU server |

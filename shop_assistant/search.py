@@ -2,6 +2,7 @@
 import dataclasses
 import datetime
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,8 @@ import numpy as np
 from shop_assistant import config
 from shop_assistant.models import FaqEntry, Product
 from shop_assistant.textnorm import normalise
+
+log = logging.getLogger(__name__)
 
 
 def _parse_product(d: dict) -> Product:
@@ -47,15 +50,45 @@ def load_products(path: Path | None = None) -> list[Product]:
     return prods
 
 
+def _no_matrix() -> tuple[np.ndarray, list[int]]:
+    return np.zeros((0, config.EMBED_DIM), dtype=np.float32), []
+
+
 def _load_matrix() -> tuple[np.ndarray, list[int]]:
-    """embeddings.npy + embeddings_ids.json → (float32[N, D], ids). Missing/mismatched → empty."""
+    """embeddings.npy + embeddings_ids.json → (float32[N, D], ids). Missing → empty, quietly.
+    Built by another embedding model / dimension, no embeddings_meta.json, or shapes that disagree →
+    one ERROR and empty: semantic search stays off until `python -m shop_assistant.index` (#23.5)."""
     if not (config.EMBEDDINGS_PATH.exists() and config.EMBEDDINGS_IDS_PATH.exists()):
-        return np.zeros((0, 0), dtype=np.float32), []
-    matrix = np.load(config.EMBEDDINGS_PATH).astype(np.float32, copy=False)
-    with open(config.EMBEDDINGS_IDS_PATH, "r", encoding="utf-8") as f:
-        ids = [int(i) for i in json.load(f)]
-    if matrix.ndim != 2 or matrix.shape[0] != len(ids):
-        return np.zeros((0, 0), dtype=np.float32), []
+        return _no_matrix()
+    where = f"{config.EMBEDDINGS_PATH}"
+    fix = f"re-index with {config.EMBED_MODEL} ({config.EMBED_DIM}-d): python -m shop_assistant.index"
+    try:
+        matrix = np.load(config.EMBEDDINGS_PATH).astype(np.float32, copy=False)
+        with open(config.EMBEDDINGS_IDS_PATH, "r", encoding="utf-8") as f:
+            ids = [int(i) for i in json.load(f)]
+        meta = None
+        if config.EMBEDDINGS_META_PATH.exists():
+            with open(config.EMBEDDINGS_META_PATH, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+    except (OSError, ValueError) as e:
+        log.error("semantic search off: cannot read %s (%s); %s", where, e, fix)
+        return _no_matrix()
+    if not isinstance(meta, dict):
+        log.error("semantic search off: %s has no model name (%s missing), expected %s; %s",
+                  where, config.EMBEDDINGS_META_PATH.name, config.EMBED_MODEL, fix)
+        return _no_matrix()
+    if meta.get("model") != config.EMBED_MODEL:
+        log.error("semantic search off: %s was built by %s, config.EMBED_MODEL is %s; %s",
+                  where, meta.get("model"), config.EMBED_MODEL, fix)
+        return _no_matrix()
+    if meta.get("dim") != config.EMBED_DIM:
+        log.error("semantic search off: %s has dimension %s, config.EMBED_DIM is %s; %s",
+                  where, meta.get("dim"), config.EMBED_DIM, fix)
+        return _no_matrix()
+    if matrix.ndim != 2 or matrix.shape != (len(ids), config.EMBED_DIM):
+        log.error("semantic search off: %s has shape %s but %d ids and dimension %s; %s",
+                  where, matrix.shape, len(ids), config.EMBED_DIM, fix)
+        return _no_matrix()
     return matrix, ids
 
 
@@ -146,11 +179,17 @@ def latest_posts(n: int = 5, products: list[Product] | None = None) -> list[Prod
 
 
 def semantic_search(text: str, max_price: int | None = None, limit: int = 5) -> list[Product]:
-    """index.embed([normalise(text)]) — D-3 —, cosine over the matrix, then price filter, top-k (FR-10)."""
-    from shop_assistant import index   # lazy: index imports ollama; avoids import cycles
+    """index.embed([normalise(text)], kind="query") — D-3 —, cosine over the matrix, then price filter, top-k
+    (FR-10). Fails fast (#23.5): if the query embedding fails for any reason → [] and one WARNING, never raises."""
+    from shop_assistant import index   # lazy: index imports the Gemini SDK; avoids import cycles
     if limit <= 0 or _matrix.shape[0] == 0:
         return []
-    q = index.embed([normalise(text)])[0]
+    try:
+        q = index.embed([normalise(text)], kind="query")[0]
+    except Exception as e:   # 429 / 5xx / timeout / invalid or missing key: the agent goes on without it
+        log.warning("semantic_search: query embedding failed, no semantic results (%s: %s)",
+                    type(e).__name__, str(e)[:200])
+        return []
     results: list[Product] = []
     for i in cosine_top_k(q, _matrix, k=limit * 4):
         p = _by_id.get(_ids[i])
@@ -206,5 +245,5 @@ if __name__ == "__main__":
             print(f"  no embeddings at {config.EMBEDDINGS_PATH} — run python -m shop_assistant.index")
         for p in semantic_search(q):
             print(_line(p))
-    except Exception as e:   # no embeddings / Ollama down — keep the CLI usable (FR-24)
+    except Exception as e:   # no embeddings / embedding API down — keep the CLI usable (FR-24)
         print(f"  semantic_search unavailable: {type(e).__name__}: {e}")

@@ -2,7 +2,6 @@
 (fake client, no network; the seam is documented at the top of tests/test_llm.py)."""
 import logging
 
-import anthropic
 import pytest
 
 from shop_assistant import agent, config, llm, search
@@ -41,17 +40,6 @@ def test_history_clear():
 
 
 # --- ticket #23: run_agent on Gemini ------------------------------------------
-
-class _NoAnthropic:
-    def __getattr__(self, name):
-        raise AssertionError("agent still calls the Anthropic client — ticket #23 moves it to llm.client()")
-
-
-@pytest.fixture(autouse=True)
-def _no_anthropic(monkeypatch):
-    if isinstance(getattr(agent, "client", None), anthropic.Anthropic):
-        monkeypatch.setattr(agent, "client", _NoAnthropic())
-
 
 @pytest.fixture
 def gemini(monkeypatch):

@@ -2,7 +2,7 @@
 
 Each line of questions.jsonl: {"q": "...", "expected": {"posts": [ids]} | {"escalate": true}}
 
-    python -m eval.run_eval                 # real agent (Ollama), ask_owner stubbed
+    python -m eval.run_eval                 # real agent (Gemini), ask_owner stubbed
     python -m eval.run_eval --dry [FILE]    # fake agent + fake tools: proves the plumbing only
 """
 import datetime
@@ -84,12 +84,10 @@ class _Capture:
 
 
 def _patch_tool(tool, name: str, wrapper):
-    """Replace the callable behind a @beta_tool object (or a plain function) so the agent's
-    tool list — which holds the same object — sees the wrapper. BetaFunctionTool.call() goes
-    through `_func_with_validate`, hence both attributes."""
-    if hasattr(tool, "_func_with_validate"):
+    """Replace the callable behind a `tools.Tool` (or a plain function) so the agent's tool list —
+    which holds the same object — sees the wrapper: Tool.call() runs `tool.func`."""
+    if hasattr(tool, "func"):
         tool.func = wrapper
-        tool._func_with_validate = wrapper
         return tool
     return wrapper
 
@@ -107,19 +105,21 @@ def _install_capture(tools_mod, capture: _Capture) -> None:
         return "forwarded"
 
     for name in ("find_products_tool", "semantic_search_tool", "latest_posts_tool"):
-        tool = getattr(tools_mod, name)
-        original = getattr(tool, "_func_with_validate", tool)
+        tool = getattr(tools_mod, name, None)
+        if tool is None:   # the dry-run tool set has no latest_posts_tool
+            continue
+        original = getattr(tool, "func", tool)
         setattr(tools_mod, name, _patch_tool(tool, name, make_recorder(name, original)))
     setattr(tools_mod, "ask_owner", _patch_tool(tools_mod.ask_owner, "ask_owner", fake_ask_owner))
 
 
-# --- dry run: fake agent + fake tools so the plumbing can be exercised without Ollama/Telegram ---
+# --- dry run: fake agent + fake tools so the plumbing can be exercised without Gemini/Telegram ---
 
 def _dry_setup():
     import types
-    from anthropic import beta_tool
     from shop_assistant import config
     from shop_assistant.models import Product
+    from shop_assistant.tools import tool
 
     catalog = [
         Product(id=1300, date="2026-09-12", link=f"https://t.me/{config.CHANNEL}/1300", name="Krossovka Nike Air",
@@ -133,18 +133,18 @@ def _dry_setup():
     def fmt(p: Product) -> str:
         return f"{p.name} · {p.price} · {' '.join(p.sizes)} · {p.date} · {p.link}"
 
-    @beta_tool
+    @tool
     def find_products_tool(keywords: list[str] | None = None) -> str:
         """Keyword filter over the dry catalog."""
         hits = [p for p in catalog if any(k.lower() in p.keywords for k in keywords or [])]
         return "\n".join(fmt(p) for p in hits) or "no results"
 
-    @beta_tool
+    @tool
     def semantic_search_tool(text: str, max_price: int | None = None) -> str:
         """Pretend semantic search: 'sport' → Dvoyka."""
         return fmt(catalog[1]) if "sport" in text.lower() else "no results"
 
-    @beta_tool
+    @tool
     def ask_owner(question: str, post_ids: list[int]) -> str:
         """Real escalation — must never run in eval."""
         raise RuntimeError("real ask_owner called: patching failed")
@@ -159,7 +159,7 @@ def _dry_setup():
 
     def run_agent(chat_id: int, text: str, history=None) -> str:
         # Same order as the system prompt (SDD §3.7): filters → semantic → ask_owner. Calls go through .call()
-        # on the objects in TOOLS exactly like the SDK tool_runner does.
+        # on the objects in TOOLS exactly like agent.py does.
         find, sem, ask = tools_mod.TOOLS
         out = find.call({"keywords": text.split()})
         if out == "no results":

@@ -5,10 +5,11 @@ whose **catalog is its Telegram channel** — no database, no website, no produc
 channel's posts, turns them into product records, searches them, replies with a photo carousel in
 the customer's own language, and asks the owner when it does not know.
 
-The language model is a hosted **Gemini free-tier** model: no per-message API cost within the free
-quota and no GPU to keep warm. **Privacy note:** customer questions and channel captions are sent to
-Google, and on the free tier Google may use prompts to improve its products — a trade-off chosen on
-2026-09-23 for faster replies (SRS C-2). Embeddings still run on a local Ollama host until #23.5.
+The language model and the embeddings are hosted **Gemini free-tier** models: no per-message API
+cost within the free quota, no GPU and no local model, so the bot runs on any small server with
+Python. **Privacy note:** customer questions and channel captions are sent to Google, and on the free
+tier Google may use prompts to improve its products — a trade-off chosen on 2026-09-23 for faster
+replies (SRS C-2).
 Built from scratch — no LangChain, no vector database, no agent framework.
 
 ![Architecture: channel → fetch → extract → index; customer → bot → agent → tools, with escalation to the owner](docs/architecture.svg)
@@ -65,8 +66,9 @@ Deployed as a user-level systemd service; the owner's shop kept running through 
    guards do what a prompt cannot: prices in shop notation (`980.000ming` → `980000`), product
    names that are a *type + brand* rather than the caption's slogan, and announcements
    ("New collection", a bare username) demoted so they never surface as products.
-3. **`index.py`** — `bge-m3` embeddings of normalised text → a numpy matrix. Cosine similarity is
-   enough for a few thousand posts; a vector DB would add nothing.
+3. **`index.py`** — Gemini embeddings (`gemini-embedding-001`, 768-d) of normalised text → a numpy
+   matrix, with the model name stored next to it so vectors from two models are never mixed. Cosine
+   similarity is enough for a few thousand posts; a vector DB would add nothing.
 4. **`textnorm.py`** — Uzbek Latin ↔ Cyrillic transliteration plus typo-tolerant normalisation, so
    `krossovka`, `кроссовка` and `krosovka` hit the same records.
 5. **`search.py`** — filters first (exact, explainable, fast), embeddings only as a fallback; every
@@ -84,14 +86,15 @@ Everything is plain Python: 1 600 lines across 12 modules, JSONL storage, no fra
 
 ```bash
 uv venv && uv pip install -r requirements.txt
-cp .env.example .env          # TG_CHANNEL, Telegram api id/hash, bot token, owner id, GEMINI_API_KEY, OLLAMA_URL
+cp .env.example .env          # TG_CHANNEL, Telegram api id/hash, bot token, owner id, GEMINI_API_KEY
 uv run python -m shop_assistant.fetch     # channel → data/posts.jsonl
 uv run python -m shop_assistant.extract   # posts → data/products.jsonl
 uv run python -m shop_assistant.index     # products → data/embeddings.npy
 uv run python -m shop_assistant.main      # start the bot
 ```
 
-Needs a Gemini API key from Google AI Studio (`GEMINI_API_KEY`, free tier) and, until #23.5, an Ollama host with `bge-m3` (`OLLAMA_URL`). `./deploy.sh` rsyncs the repo
+Needs only a Gemini API key from Google AI Studio (`GEMINI_API_KEY`, free tier) — it covers the reply
+model, extraction and embeddings. `./deploy.sh` rsyncs the repo
 to `DEPLOY_HOST` and installs the systemd unit.
 
 ## Docs
