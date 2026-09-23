@@ -3,6 +3,7 @@ import dataclasses
 import datetime
 import json
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -92,6 +93,26 @@ def _load_matrix() -> tuple[np.ndarray, list[int]]:
     return matrix, ids
 
 
+def _data_paths() -> tuple[Path, ...]:
+    return (config.PRODUCTS_PATH, config.EMBEDDINGS_PATH, config.EMBEDDINGS_IDS_PATH, config.EMBEDDINGS_META_PATH)
+
+
+def _signature(paths=None) -> tuple:
+    """((path, (mtime_ns, size) or None when missing), ...) — os.stat only, no file is read (#18).
+    Default: the files reload() reads now. embeddings_meta.json is written last by index.py, so a finished
+    re-index always changes it."""
+    sig = []
+    for path in (_data_paths() if paths is None else paths):
+        try:
+            st = os.stat(path)
+        except OSError:
+            sig.append((str(path), None))
+        else:
+            sig.append((str(path), (st.st_mtime_ns, st.st_size)))
+    return tuple(sig)
+
+
+_loaded_sig = _signature()   # taken before reading: a write during the read shows up as a change next time
 PRODUCTS: list[Product] = load_products()
 _by_id: dict[int, Product] = {p.id: p for p in PRODUCTS}
 _matrix, _ids = _load_matrix()
@@ -131,6 +152,8 @@ def find_products(category: str | None = None, min_price: int | None = None,
                   color: str | None = None, keywords: list[str] | None = None,
                   limit: int = 5, products: list[Product] | None = None) -> list[Product]:
     """ANDed filters over products.jsonl; newest first; each result carries `stale` (FR-8, FR-16)."""
+    if products is None:
+        reload_if_changed()
     catalog = PRODUCTS if products is None else products
     results: list[Product] = []
 
@@ -182,6 +205,7 @@ def semantic_search(text: str, max_price: int | None = None, limit: int = 5) -> 
     """index.embed([normalise(text)], kind="query") — D-3 —, cosine over the matrix, then price filter, top-k
     (FR-10). Fails fast (#23.5): if the query embedding fails for any reason → [] and one WARNING, never raises."""
     from shop_assistant import index   # lazy: index imports the Gemini SDK; avoids import cycles
+    reload_if_changed()
     if limit <= 0 or _matrix.shape[0] == 0:
         return []
     try:
@@ -221,22 +245,33 @@ def search_faq(text: str, limit: int = 3) -> list[FaqEntry]:
     return []
 
 
-_loaded_sig = None   # (mtime_ns, size) signature of the files the current catalog/matrix was loaded from (#18)
-
-
 def reload_if_changed() -> bool:
     """Ticket #18: cheap check (os.stat only) whether products.jsonl / the embeddings files on disk differ
     from what was last loaded; if so reload() and return True, else False. Called by find_products /
-    latest_posts / semantic_search so the bot picks up the nightly index without a restart."""
-    raise NotImplementedError("ticket #18")
+    latest_posts / semantic_search so the bot picks up the nightly index without a restart.
+    A reload that fails (e.g. a line being appended right now) logs a WARNING, keeps the old catalog and
+    leaves _loaded_sig as it was, so the next call tries again."""
+    # Stat the files the current state was loaded FROM (in production always the config paths).
+    if _loaded_sig is not None and _signature([path for path, _ in _loaded_sig]) == _loaded_sig:
+        return False
+    try:
+        reload()
+    except Exception as e:   # never break a customer search because of a file caught mid-write
+        log.warning("reload_if_changed: data files changed but could not be read, keeping the old catalog "
+                    "(%s: %s)", type(e).__name__, str(e)[:200])
+        return False
+    log.info("reloaded %d products and %d embedding rows from disk", len(PRODUCTS), len(_ids))
+    return True
 
 
 def reload() -> None:
-    """Re-read products.jsonl + .npy from disk (admin /reindex)."""
-    global PRODUCTS, _by_id, _matrix, _ids
-    PRODUCTS = load_products()
-    _by_id = {p.id: p for p in PRODUCTS}
-    _matrix, _ids = _load_matrix()
+    """Re-read products.jsonl + .npy from disk (admin /reindex, reload_if_changed). All-or-nothing: the
+    module state is replaced only after everything was read."""
+    global PRODUCTS, _by_id, _matrix, _ids, _loaded_sig
+    sig = _signature()
+    products = load_products()
+    matrix, ids = _load_matrix()
+    PRODUCTS, _by_id, _matrix, _ids, _loaded_sig = products, {p.id: p for p in products}, matrix, ids, sig
 
 
 if __name__ == "__main__":
