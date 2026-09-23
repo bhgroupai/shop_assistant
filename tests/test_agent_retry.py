@@ -1,7 +1,7 @@
 """Ticket #26 — agent.py: shorter Gemini timeout + one retry on 5xx / timeout (fake client, no network).
 
 Contract (decision by Sanjarbek: retry once on the same model, no backup model):
-* `llm.AGENT_TIMEOUT_S` <= 8 s, still sent in every agent request as `http_options.timeout` (ms).
+* `llm.AGENT_TIMEOUT_S` in 10..15 s (15 chosen 2026-09-23; 8 s failed live), still sent in every agent request as `http_options.timeout` (ms).
 * Each agent `generate_content` request that fails with a server error (500 / 502 / 503 / 504) or a
   client timeout (httpx timeout, e.g. `httpx.ReadTimeout` / `httpx.ConnectTimeout`) is retried ONCE,
   with the same model and the same contents, after a pause of 0.5–1 s taken with `time.sleep`
@@ -95,8 +95,8 @@ def _errors(caplog):
 
 # --- timeout -----------------------------------------------------------------
 
-def test_agent_timeout_is_at_most_8_seconds():
-    assert 0 < llm.AGENT_TIMEOUT_S <= 8
+def test_agent_timeout_is_15_seconds_or_less():
+    assert 10 <= llm.AGENT_TIMEOUT_S <= 15
     assert llm.EXTRACT_TIMEOUT_S > llm.AGENT_TIMEOUT_S        # extraction timeout unchanged
 
 
