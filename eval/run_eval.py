@@ -15,7 +15,7 @@ from pathlib import Path
 _LINK_RE = re.compile(r"t\.me/[A-Za-z0-9_]+/(\d+)")
 _PRICE_RE = re.compile(r"\d{1,3}(?:[ .]\d{3})+|\d{4,}")           # 350 000 · 350.000 · 350000
 _SIZE_RE = re.compile(r"(?<![\w.])\d{1,2}(?![\w.])")                # standalone 1–2 digits; "2XL" is skipped
-_NOISE_RE = re.compile(r"https?://\S+|\bt\.me/\S+|\d{4}-\d{2}-\d{2}")   # links and ISO dates are not prices/sizes
+_NOISE_RE = re.compile(r"https?://\S+|\bt\.me/\S+|\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4}")   # links and dates (ISO or DD.MM.YYYY) are not prices/sizes
 
 
 def load_questions(path) -> list[dict]:
@@ -157,7 +157,7 @@ def _dry_setup():
         def __init__(self) -> None:
             self.msgs: list = []
 
-    def run_agent(chat_id: int, text: str, history=None) -> str:
+    def run_agent(chat_id: int, text: str, history=None, lang=None) -> str:
         # Same order as the system prompt (SDD §3.7): filters → semantic → ask_owner. Calls go through .call()
         # on the objects in TOOLS exactly like agent.py does.
         find, sem, ask = tools_mod.TOOLS
@@ -180,7 +180,7 @@ PACE_S_PER_REQUEST = 4.5   # 60 s / 15 requests per minute (gemini-3.5-flash-lit
 
 
 def main(dry: bool = False, questions_path=None) -> None:
-    from shop_assistant import config
+    from shop_assistant import config, lang
 
     if dry:
         run_agent, History, tools_mod, catalog = _dry_setup()
@@ -198,7 +198,7 @@ def main(dry: bool = False, questions_path=None) -> None:
         q, expected = item["q"], item.get("expected", {})
         capture.reset()
         t0 = time.perf_counter()
-        answer = run_agent(i, q, History())
+        answer = run_agent(i, q, History(), lang=lang.detect(q) or lang.DEFAULT)   # as bot.py resolves it (#24)
         ms = int((time.perf_counter() - t0) * 1000)
 
         posts = sorted(capture.ids("find_products_tool") | capture.ids("semantic_search_tool") | capture.ids("latest_posts_tool"))
