@@ -74,7 +74,8 @@ FAQ entries are embedded too (separate `faq_embeddings.npy`), so `search_faq` is
 `{"last_post_id": 1234, "last_index_at": "..."}` — drives incremental ingestion (FR-7) and `/stats` (FR-26).
 
 ### 2.6 `log.jsonl` — one line per customer turn (FR-25)
-`{"ts", "chat_id", "question", "tools": [{"name", "input", "n_results"}], "answer", "escalated": bool, "ms", "usd"}`
+`{"ts", "chat_id", "question", "tools": [{"name", "input", "n_results"}], "answer", "escalated": bool, "ms", "usd", "llm_calls": int}`
+(`llm_calls` = Gemini requests that turn, LLM + query embeddings; older lines without it count 1.)
 
 ## 3. Components
 
@@ -211,4 +212,5 @@ shop_assistant/                   # repo root; run everything from here
 | 0.3 | 2026-09-17 | §5: tests per ticket live on the ticket branch (senior-written), `main` keeps only merged tests; CI added |
 | 0.5 | 2026-09-17 | Spike #3 results: embed normalised text (§3.3, §3.5, D-3); `max_tokens ≥ 1000` for extraction (§3.2) |
 | 0.6 | 2026-09-21 | S4: §3.8 carousel reply (D-8); §3.2 product names = type + brand (`product_name` guard) and announcements → `boshqa` (`is_announcement`); §3.5 search excludes `boshqa` (D-9); tools number results, `narxi: so'rab beraman` + offer line (#21) |
+| 0.7 | 2026-09-23 | #17: owner `/stats` (indexed posts, last index, questions/escalations today, `Gemini: N / GEMINI_DAILY_LIMIT today` from `log.jsonl` + `gemini_ingest.jsonl`) and `/reindex` (`search.reload()`); §2.6 `log.jsonl` gains `llm_calls`; `run()` dispatches through `bot.route` |
 | 0.4 | 2026-09-17 | SRS C-2 v0.4: Claude + Voyage replaced by Ollama on the GPU server (`gemma4:31b`, `bge-m3`); §1.1, §3.2, §3.3, §3.7, §3.9, §7 updated; deploy target = the GPU server |

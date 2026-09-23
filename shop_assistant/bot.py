@@ -5,7 +5,8 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 
 from shop_assistant import config
 
@@ -32,8 +33,9 @@ _bot = None
 # ---------------------------------------------------------------- pure helpers (#13, #14)
 
 def log_turn(chat_id: int, question: str, tools: list[dict], answer: str,
-             escalated: bool, ms: int, usd: float) -> dict:
-    """Build + append one log.jsonl line (SDD §2.6, FR-25). Returns the record."""
+             escalated: bool, ms: int, usd: float, llm_calls: int = 1) -> dict:
+    """Build + append one log.jsonl line (SDD §2.6, FR-25). Returns the record.
+    Ticket #17: the record also carries `llm_calls` (Gemini requests this turn, see llm_calls_for)."""
     rec = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "chat_id": chat_id,
@@ -43,6 +45,7 @@ def log_turn(chat_id: int, question: str, tools: list[dict], answer: str,
         "escalated": escalated,
         "ms": ms,
         "usd": usd,
+        "llm_calls": int(llm_calls),
     }
     path = config.LOG_PATH  # read at call time — tests monkeypatch it
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +84,132 @@ def post_ids_in(text: str) -> list[int]:
                 break
     return ids
 
+
+
+# ---------------------------------------------------------------- owner commands (ticket #17)
+
+INGEST_LOG_NAME = "gemini_ingest.jsonl"  # in config.DATA_DIR; one line {"ts": ISO, ...} per ingestion Gemini request
+
+
+def llm_calls_for(last_run: dict) -> int:
+    """Gemini requests (LLM + embedding) of one agent turn, from agent.last_run:
+    last_run["llm_calls"] when it is an int, else 1 + len(tools) + number of tools named
+    "semantic_search_tool" (each one embeds the query)."""
+    last_run = last_run or {}
+    explicit = last_run.get("llm_calls")
+    if isinstance(explicit, int) and not isinstance(explicit, bool):
+        return explicit
+    tools = last_run.get("tools") or []
+    embeds = sum(1 for t in tools if isinstance(t, dict) and t.get("name") == "semantic_search_tool")
+    return 1 + len(tools) + embeds
+
+
+def _jsonl_today(path: Path, today: str):
+    """Yield the records of a .jsonl file whose `ts` date is `today`; missing file → nothing."""
+    if not path.exists():
+        return
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                log.warning("skipping malformed line in %s", path)
+                continue
+            if str(rec.get("ts", ""))[:10] == today:
+                yield rec
+
+
+def compute_stats(today: date, log_path: Path | None = None, state_path: Path | None = None,
+                  ingest_log_path: Path | None = None) -> dict:
+    """Counts for /stats. Paths default (at call time) to config.LOG_PATH, config.STATE_PATH,
+    config.DATA_DIR / INGEST_LOG_NAME. Only lines whose `ts` date == today count.
+    Keys: indexed_posts (len(search.PRODUCTS)), last_index_at (state.json value or None),
+    questions_today, escalations_today, gemini_today (sum of llm_calls — 1 when absent — plus
+    today's ingest-log lines), gemini_limit (config.GEMINI_DAILY_LIMIT)."""
+    from shop_assistant import search  # lazy: search loads the catalog at import
+    log_path = log_path or config.LOG_PATH
+    state_path = state_path or config.STATE_PATH
+    ingest_log_path = ingest_log_path or (config.DATA_DIR / INGEST_LOG_NAME)
+    day = today.isoformat()
+
+    questions = escalations = gemini = 0
+    for rec in _jsonl_today(log_path, day):
+        questions += 1
+        if rec.get("escalated"):
+            escalations += 1
+        n = rec.get("llm_calls")
+        gemini += n if isinstance(n, int) and not isinstance(n, bool) else 1
+    gemini += sum(1 for _ in _jsonl_today(ingest_log_path, day))
+
+    last_index_at = None
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8") or "{}")
+            last_index_at = state.get("last_index_at")
+        except json.JSONDecodeError:
+            log.warning("could not parse %s", state_path)
+
+    return {
+        "indexed_posts": len(search.PRODUCTS),
+        "last_index_at": last_index_at,
+        "questions_today": questions,
+        "escalations_today": escalations,
+        "gemini_today": gemini,
+        "gemini_limit": config.GEMINI_DAILY_LIMIT,
+    }
+
+
+def format_stats(stats: dict) -> str:
+    """Lines: 'Indexed posts: N', 'Last index: <ts or ->', 'Questions today: N',
+    'Escalations today: N', 'Gemini: N / LIMIT today'."""
+    return "\n".join([
+        f"Indexed posts: {stats['indexed_posts']}",
+        f"Last index: {stats['last_index_at'] or '-'}",
+        f"Questions today: {stats['questions_today']}",
+        f"Escalations today: {stats['escalations_today']}",
+        f"Gemini: {stats['gemini_today']} / {stats['gemini_limit']} today",
+    ])
+
+
+async def handle_stats(event) -> None:
+    """Owner /stats → reply format_stats(compute_stats(date.today()))."""
+    await event.reply(format_stats(compute_stats(date.today())))
+
+
+async def handle_reindex(event) -> None:
+    """Owner /reindex → search.reload(), then reply with the new product count."""
+    from shop_assistant import search
+    await asyncio.to_thread(search.reload)  # disk read; keep the loop free
+    await event.reply(f"Reindex OK: {len(search.PRODUCTS)} products")
+
+
+def _command(text: str) -> str:
+    """'/stats@shop_bot extra' → '/stats'; '' when the text is not a command."""
+    parts = (text or "").strip().split(maxsplit=1)
+    if not parts or not parts[0].startswith("/"):
+        return ""
+    return parts[0].split("@", 1)[0].lower()
+
+
+async def route(event, owner: int) -> None:
+    """Top-level NewMessage dispatch (run() uses it). Owner in private: '/stats' → handle_stats,
+    '/reindex' → handle_reindex, anything else → handle_owner_reply. Customers (should_handle)
+    → handle_customer, whatever the text (a customer's /stats is a normal question).
+    Groups / channels: ignored."""
+    if event.sender_id == owner and event.is_private:
+        cmd = _command(event.raw_text)
+        if cmd == "/stats":
+            await handle_stats(event)
+        elif cmd == "/reindex":
+            await handle_reindex(event)
+        else:
+            await handle_owner_reply(event)
+    elif should_handle(event.is_private, event.sender_id, owner):
+        await handle_customer(event)
+    # groups / channels: ignored (C-5)
 
 
 # ---------------------------------------------------------------- carousel reply (ticket #19)
@@ -312,7 +441,8 @@ async def handle_customer(event) -> None:
         await send_reply(event, reply)
         last = getattr(agent, "last_run", {}) or {}
         log_turn(event.chat_id, text, last.get("tools", []), reply,
-                 last.get("escalated", False), ms, last.get("usd", 0.0))
+                 last.get("escalated", False), ms, last.get("usd", 0.0),
+                 llm_calls=llm_calls_for(last))
     except Exception:
         log.exception("handle_customer failed for chat %s", getattr(event, "chat_id", "?"))
         try:
@@ -364,11 +494,7 @@ def run() -> None:
     owner = owner_id()
 
     async def dispatch(event) -> None:
-        if event.sender_id == owner and event.is_private:
-            await handle_owner_reply(event)
-        elif should_handle(event.is_private, event.sender_id, owner):
-            await handle_customer(event)
-        # groups / channels: ignored (C-5)
+        await route(event, owner)  # owner commands, owner replies, customers (#17)
 
     client.add_event_handler(dispatch, events.NewMessage(incoming=True))
     client.add_event_handler(handle_callback, events.CallbackQuery())
