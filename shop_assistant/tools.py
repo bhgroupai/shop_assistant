@@ -1,8 +1,84 @@
-"""@beta_tool wrappers with compact text output. SDD §3.6, FR-11, NFR-2. Ticket #9."""
-from anthropic import beta_tool
+"""Tool wrappers with compact text output. SDD §3.6, FR-11, NFR-2. Tickets #9, #23.5."""
+import dataclasses
+import inspect
+import re
+import types
+import typing
+from typing import Any, Callable
 
 from shop_assistant import config, search
 from shop_assistant.models import FaqEntry, Product
+
+
+@dataclasses.dataclass
+class Tool:
+    """A plain tool definition: what the model sees (`name`, `description`, JSON-schema `input_schema`)
+    and `call(args)`, which runs `func(**args)`. `llm.tool_declarations` converts it for Gemini."""
+    name: str
+    description: str
+    input_schema: dict
+    func: Callable[..., Any]
+
+    def call(self, args: dict) -> str:
+        return str(self.func(**(args or {})))
+
+
+_JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
+
+
+def _json_schema(hint) -> dict:
+    """Python type hint → JSON schema (str, int, float, bool, list[X], X | None)."""
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin in (typing.Union, types.UnionType):
+        inner = [a for a in args if a is not type(None)]
+        if len(inner) != 1:
+            raise TypeError(f"unsupported tool parameter type {hint}")
+        schema = _json_schema(inner[0])
+        return {**schema, "type": [schema["type"], "null"]} if len(inner) < len(args) else schema
+    if origin is list:
+        return {"type": "array", "items": _json_schema(args[0]) if args else {}}
+    if hint in _JSON_TYPES:
+        return {"type": _JSON_TYPES[hint]}
+    raise TypeError(f"unsupported tool parameter type {hint}")
+
+
+def _split_docstring(doc: str) -> tuple[str, dict[str, str]]:
+    """Google-style docstring → (summary, {arg: description}). Continuation lines of an argument are
+    kept on their own lines (dedented)."""
+    doc = inspect.cleandoc(doc or "")
+    summary, _, args_block = doc.partition("\nArgs:\n")
+    lines = [ln for ln in args_block.splitlines() if ln.strip()]
+    indent = min((len(ln) - len(ln.lstrip()) for ln in lines), default=0)   # the argument-name column
+    args: dict[str, str] = {}
+    current = None
+    for line in lines:
+        m = re.match(r"(\w+):\s*(.*)$", line.strip())
+        if m and len(line) - len(line.lstrip()) == indent:
+            current = m.group(1)
+            args[current] = m.group(2)
+        elif current is not None:
+            args[current] += "\n" + line.strip()
+    return summary.strip(), args
+
+
+def tool(func: Callable[..., str]) -> Tool:
+    """Decorator: build a Tool from the function's signature (types, defaults → required) and docstring."""
+    summary, arg_docs = _split_docstring(func.__doc__)
+    hints = typing.get_type_hints(func)
+    properties: dict[str, dict] = {}
+    required: list[str] = []
+    for name, param in inspect.signature(func).parameters.items():
+        prop = _json_schema(hints[name])
+        if name in arg_docs:
+            prop["description"] = arg_docs[name]
+        properties[name] = prop
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+    schema = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return Tool(name=func.__name__, description=summary, input_schema=schema, func=func)
+
 
 NO_RESULTS = "no results"
 NO_FAQ = "no faq entries"
@@ -42,7 +118,7 @@ def _format_faq(entry: FaqEntry) -> str:
     return f"{entry.question} — {entry.answer}".replace("\n", " ")
 
 
-@beta_tool
+@tool
 def find_products_tool(category: str | None = None, min_price: int | None = None,
                        max_price: int | None = None, size: str | None = None,
                        color: str | None = None, keywords: list[str] | None = None) -> str:
@@ -66,7 +142,7 @@ def find_products_tool(category: str | None = None, min_price: int | None = None
     return format_products(products)
 
 
-@beta_tool
+@tool
 def semantic_search_tool(text: str, max_price: int | None = None) -> str:
     """Meaning-based search over the catalog for descriptive questions when find_products_tool
     returned "no results" (e.g. "something warm for winter", "подарок для мамы").
@@ -80,7 +156,7 @@ def semantic_search_tool(text: str, max_price: int | None = None) -> str:
     return format_products(products)
 
 
-@beta_tool
+@tool
 def latest_posts_tool(n: int = 5) -> str:
     """The newest posts in the shop channel ("what's new?", "yangi tovarlar bormi?").
     Returns one product per line (same format as find_products_tool) or "no results".
@@ -92,7 +168,7 @@ def latest_posts_tool(n: int = 5) -> str:
     return format_products(search.latest_posts(n))
 
 
-@beta_tool
+@tool
 def search_faq_tool(text: str) -> str:
     """Search the owner's earlier answers about delivery, payment, address, working hours,
     returns and other shop questions. Returns one entry per line as "question — answer",
@@ -105,7 +181,7 @@ def search_faq_tool(text: str) -> str:
     return "\n".join(_format_faq(e) for e in entries) or NO_FAQ
 
 
-@beta_tool
+@tool
 def ask_owner(question: str, post_ids: list[int]) -> str:
     """Forward the customer's question to the shop owner. Use when the customer asks about stock or
     availability, when no relevant product was found, or when the question is about orders, delivery,

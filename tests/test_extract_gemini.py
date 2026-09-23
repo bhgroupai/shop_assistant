@@ -5,7 +5,6 @@ import logging
 import re
 import time
 
-import anthropic
 import pytest
 
 from shop_assistant import config, extract, llm
@@ -44,22 +43,16 @@ def _record_products(contents):
     return call_response("record_products", {"products": [ITEMS[i] for i in ids]})
 
 
-class _NoAnthropic:
-    def __init__(self, *a, **kw):
-        raise AssertionError("extract still builds an Anthropic client — ticket #23 moves it to llm.client()")
-
-
 @pytest.fixture(autouse=True)
-def _no_anthropic_no_sleep(monkeypatch):
-    monkeypatch.setattr(anthropic, "Anthropic", _NoAnthropic)
+def _no_sleep(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
     return sleeps
 
 
 @pytest.fixture
-def sleeps(_no_anthropic_no_sleep):
-    return _no_anthropic_no_sleep
+def sleeps(_no_sleep):
+    return _no_sleep
 
 
 @pytest.fixture

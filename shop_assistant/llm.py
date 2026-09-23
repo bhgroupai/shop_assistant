@@ -14,7 +14,7 @@ EXTRACT_TIMEOUT_S = 90     # per extraction request (a batch of captions takes l
 
 _client = None             # cached genai.Client, created on first use by client()
 
-# JSON-schema keywords the Anthropic format accepts but Gemini's Schema rejects or does not need.
+# JSON-schema keywords that tool definitions may carry but Gemini's Schema rejects or does not need.
 _DROP_KEYS = frozenset({"additionalProperties", "title", "default", "$schema", "$defs", "$ref"})
 
 
@@ -32,7 +32,7 @@ def _field(tool, name: str):
 
 
 def _schema(node):
-    """Anthropic JSON schema -> Gemini Schema dict. Works on a copy; never mutates `node`."""
+    """JSON schema (tool input_schema) -> Gemini Schema dict. Works on a copy; never mutates `node`."""
     if isinstance(node, list):
         return [_schema(v) for v in node]
     if not isinstance(node, dict):
@@ -74,7 +74,7 @@ def _schema(node):
 
 
 def tool_declarations(tools) -> list[dict]:
-    """Anthropic-style tool defs (dicts or objects with name / description / input_schema, e.g.
+    """Tool defs (dicts or objects with name / description / input_schema, e.g.
     tools.TOOLS or extract._TOOL) -> Gemini function declarations as plain dicts
     {"name", "description", "parameters"}. Strips JSON-schema keywords Gemini rejects; never mutates input."""
     decls: list[dict] = []

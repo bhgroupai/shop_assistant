@@ -10,8 +10,8 @@ A senior writes the **tests** for a ticket on a branch and assigns it to you. Yo
 git clone git@github.com:bhgroupai/shop_assistant.git && cd shop_assistant
 uv venv && uv pip install -r requirements.txt
 cp .env.example .env            # fill only the keys your ticket lists; ask Sanjarbek for values
-# Models run on the GPU server (Ollama). On the same LAN: OLLAMA_URL=http://<gpu-host>:11434.
-# From home: `ssh -N -L 11434:localhost:11434 <gpu-host>` in a second terminal, keep OLLAMA_URL=http://localhost:11434.
+# All models (reply, extraction, embeddings) are Gemini API calls: GEMINI_API_KEY is the only model setting.
+# Use your own AI Studio key for development — the free quota is per project.
 uv run pytest -q                # expect: all passed
 ```
 Never commit `.env`, `data/`, `session/` (already gitignored).

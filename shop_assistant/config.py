@@ -13,7 +13,6 @@ CATEGORIES = ["kiyim", "poyabzal", "aksessuar", "boshqa"]   # SDD §2.2
 HISTORY_TURNS = 10         # FR-17
 EXTRACT_BATCH = 20         # NFR-3; spike 2026-09-23: 5/10/20 all 100% valid → 20 (7 requests for 134 posts)
 MIN_PRICE = 10_000         # so'm; smaller "prices" from the model are junk → None
-EMBED_BATCH = 128          # NFR-3
 
 # Gemini API, free tier, via google-genai (SDD §1.1, SRS C-2). Agent + extraction; shared client in llm.py.
 # Measured 2026-09-23 on the free key: gemini-3.5-flash / 2.5-flash = 5 requests/minute (429 quotaValue),
@@ -24,9 +23,22 @@ EMBED_BATCH = 128          # NFR-3
 GEMINI_MODEL = "gemini-3.5-flash-lite"   # customer agent
 GEMINI_EXTRACT_MODEL = "gemini-3.5-flash"   # post extraction
 MAX_ITERATIONS = 8               # model requests per customer turn
-EMBED_MODEL = "bge-m3"           # Ollama, multilingual embeddings, 1024-d — until #23.5
 GEMINI_DAILY_LIMIT = 250        # free-tier requests/day shown by /stats (#17); TODO(#23): set from AI Studio
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+
+# Embeddings (#23.5), same client and key. models.list() on 2026-09-23 offered gemini-embedding-001,
+#   gemini-embedding-2 and gemini-embedding-2-preview. gemini-embedding-2 folds a list of texts into ONE
+#   embedding (multimodal content), so it cannot batch products; gemini-embedding-001 returns one vector per
+#   text (input limit 2048 tokens). Spike 2026-09-23 (scripts/spike_gemini_embed.py, 768-d): krossovka
+#   spelling variants 0.96-1.00 after normalise (old local model: 0.87). 768-d vectors are not unit length
+#   (norm ~0.59) -> index.embed L2-normalises.
+# Measured 2026-09-23 on the free key: 429 quotaId EmbedContentRequestsPerMinutePerUserPerProjectPerModel-FreeTier,
+#   quotaValue 100 — and every TEXT in a batch counts as one request (one 100-text batch used the whole
+#   minute). A separate quota from the chat models. So a 134-product re-index needs a minute of retries
+#   (index.BACKOFF_S); a customer query is 1 of the 100/min. 101 texts in one request -> 400 "at most 100".
+# TODO: requests/day — read from AI Studio -> Rate limits (not exposed by the API).
+EMBED_MODEL = "gemini-embedding-001"
+EMBED_DIM = 768                  # output_dimensionality (Matryoshka; the API allows 128..3072)
+EMBED_BATCH = 100                # texts per embed_content request (API maximum, measured) -> 2 requests for 134 products
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
@@ -35,6 +47,7 @@ POSTS_PATH = DATA_DIR / "posts.jsonl"
 PRODUCTS_PATH = DATA_DIR / "products.jsonl"
 EMBEDDINGS_PATH = DATA_DIR / "embeddings.npy"
 EMBEDDINGS_IDS_PATH = DATA_DIR / "embeddings_ids.json"
+EMBEDDINGS_META_PATH = DATA_DIR / "embeddings_meta.json"   # {"model", "dim", "n"} of the matrix (#23.5)
 FAQ_PATH = DATA_DIR / "faq.jsonl"
 FAQ_EMBEDDINGS_PATH = DATA_DIR / "faq_embeddings.npy"
 STATE_PATH = DATA_DIR / "state.json"

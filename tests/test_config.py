@@ -32,9 +32,17 @@ def test_secret_present(monkeypatch):
     assert config.secret("TG_BOT_TOKEN") == "123:abc"
 
 
-def test_embeddings_still_on_ollama():
-    assert config.EMBED_MODEL == "bge-m3"             # until ticket #23.5
-    assert config.OLLAMA_URL.startswith("http")
+def test_embeddings_on_gemini():                          # ticket #23.5
+    assert isinstance(config.EMBED_MODEL, str) and "embedding" in config.EMBED_MODEL
+    assert "bge" not in config.EMBED_MODEL.lower()
+    assert isinstance(config.EMBED_DIM, int) and 128 <= config.EMBED_DIM <= 3072
+    assert isinstance(config.EMBED_BATCH, int) and 1 <= config.EMBED_BATCH <= 100   # embed_content limit
+    assert config.EMBEDDINGS_META_PATH == config.DATA_DIR / "embeddings_meta.json"
+
+
+def test_no_ollama_or_anthropic_settings():              # ticket #23.5
+    assert not hasattr(config, "OLLAMA_URL")
+    assert not [k for k in vars(config) if k.upper().startswith(("ANTHROPIC", "OLLAMA"))]
 
 
 def test_gemini_model_replaces_local_gemma():          # ticket #23

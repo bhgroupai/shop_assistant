@@ -1,0 +1,118 @@
+[
+ {
+  "name": "find_products_tool",
+  "description": "Filter the shop catalog. All given filters are ANDed; newest posts first. Returns one numbered product per line: N. name · price · sizes · date · link (· [eskirgan] if the post is old), or \"no results\". Items without a price show \"narxi: so'rab beraman\"; then a final offer line tells the customer to write the item number to ask for its price.",
+  "parameters": {
+   "properties": {
+    "category": {
+     "type": "string",
+     "description": "One of: kiyim (clothes), poyabzal (shoes), aksessuar (accessories), boshqa (other).",
+     "nullable": true
+    },
+    "min_price": {
+     "type": "integer",
+     "description": "Minimum price in so'm (UZS).",
+     "nullable": true
+    },
+    "max_price": {
+     "type": "integer",
+     "description": "Maximum price in so'm (UZS).",
+     "nullable": true
+    },
+    "size": {
+     "type": "string",
+     "description": "Exact size string as printed on the post, e.g. \"42\" or \"XL\".",
+     "nullable": true
+    },
+    "color": {
+     "type": "string",
+     "description": "Color name in Uzbek, e.g. \"qora\", \"oq\", \"kok\".",
+     "nullable": true
+    },
+    "keywords": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array",
+     "description": "Product keywords in any language or script (uz Latin, uz Cyrillic, ru, en),\ne.g. [\"krossovka\"], [\"кроссовки\"], [\"kurtka\", \"jacket\"].",
+     "nullable": true
+    }
+   },
+   "type": "object"
+  }
+ },
+ {
+  "name": "semantic_search_tool",
+  "description": "Meaning-based search over the catalog for descriptive questions when find_products_tool returned \"no results\" (e.g. \"something warm for winter\", \"подарок для мамы\"). Returns one product per line (same format as find_products_tool) or \"no results\".",
+  "parameters": {
+   "properties": {
+    "text": {
+     "description": "The customer's description of what they want, in any language or script.",
+     "type": "string"
+    },
+    "max_price": {
+     "type": "integer",
+     "description": "Maximum price in so'm (UZS).",
+     "nullable": true
+    }
+   },
+   "required": [
+    "text"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "latest_posts_tool",
+  "description": "The newest posts in the shop channel (\"what's new?\", \"yangi tovarlar bormi?\"). Returns one product per line (same format as find_products_tool) or \"no results\".",
+  "parameters": {
+   "properties": {
+    "n": {
+     "description": "How many latest products to return (1-5).",
+     "type": "integer"
+    }
+   },
+   "type": "object"
+  }
+ },
+ {
+  "name": "search_faq_tool",
+  "description": "Search the owner's earlier answers about delivery, payment, address, working hours, returns and other shop questions. Returns one entry per line as \"question — answer\", or \"no faq entries\".",
+  "parameters": {
+   "properties": {
+    "text": {
+     "description": "The customer's question, in any language or script.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "text"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "ask_owner",
+  "description": "Forward the customer's question to the shop owner. Use when the customer asks about stock or availability, when no relevant product was found, or when the question is about orders, delivery, payment or anything not in the catalog. Returns \"forwarded\"; then tell the customer the owner will reply soon.",
+  "parameters": {
+   "properties": {
+    "question": {
+     "description": "The customer's question, quoted as they wrote it.",
+     "type": "string"
+    },
+    "post_ids": {
+     "description": "Numeric ids of the products the question is about (from the post links), or [].",
+     "items": {
+      "type": "integer"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "question",
+    "post_ids"
+   ],
+   "type": "object"
+  }
+ }
+]
