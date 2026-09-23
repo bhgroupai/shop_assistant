@@ -32,8 +32,32 @@ def test_secret_present(monkeypatch):
     assert config.secret("TG_BOT_TOKEN") == "123:abc"
 
 
-def test_ollama_defaults_point_anthropic_sdk_at_ollama():
-    assert config.MODEL == "gemma4:31b" and config.EMBED_MODEL == "bge-m3"
+def test_embeddings_still_on_ollama():
+    assert config.EMBED_MODEL == "bge-m3"             # until ticket #23.5
     assert config.OLLAMA_URL.startswith("http")
-    import os
-    assert os.environ["ANTHROPIC_BASE_URL"] == config.OLLAMA_URL
+
+
+def test_gemini_model_replaces_local_gemma():          # ticket #23
+    model = getattr(config, "GEMINI_MODEL", None)
+    assert isinstance(model, str) and model.startswith("gemini")
+    assert not hasattr(config, "MODEL"), "MODEL (gemma4) is replaced by GEMINI_MODEL"
+    assert not hasattr(config, "THINKING"), "THINKING was gemma4-specific"
+    assert config.MAX_ITERATIONS == 8
+
+
+def test_gemini_key_is_a_known_secret(monkeypatch):     # ticket #23
+    assert "GEMINI_API_KEY" in config.ENV_KEYS
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-test-key-shop-assistant")
+    assert config.secret("GEMINI_API_KEY") == "AIza-test-key-shop-assistant"
+
+
+def test_gemini_key_missing_raises(monkeypatch):         # ticket #23
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
+        config.secret("GEMINI_API_KEY")
+
+
+def test_no_real_key_in_env_example():                   # ticket #23: placeholder only
+    example = (config.ROOT / ".env.example").read_text()
+    assert "GEMINI_API_KEY" in example
+    assert "AIza" not in example
