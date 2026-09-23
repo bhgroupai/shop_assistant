@@ -41,7 +41,8 @@ because a Telegram channel has no stock field.
 
 ## Results
 
-Measured on 2026-09-22 with the previous local model (`gemma4:31b`; not yet re-run on Gemini) by a 20-question eval suite (real customer phrasings in Uzbek Latin, Uzbek Cyrillic and
+Measured on 2026-09-23 on the Gemini free tier (`gemini-3.5-flash-lite` answers customers, `gemini-3.5-flash`
+extracts posts) by a 20-question eval suite (real customer phrasings in Uzbek Latin, Uzbek Cyrillic and
 Russian, including questions the bot is supposed to escalate rather than answer):
 
 | Metric | Result |
@@ -49,9 +50,9 @@ Russian, including questions the bot is supposed to escalate rather than answer)
 | Correct answers | **19 / 20** |
 | Invented prices or sizes | **0** |
 | Questions only semantic search could answer | 4 of 20 |
-| Median reply latency | **5.7 s** on one RTX 5090 (typical p95 ~9 s; a cold model load pushes the first call to ~25 s) |
-| Model cost | **$0** — local `gemma4:31b` + `bge-m3` at the time; now Gemini free tier (no cost within the free quota) |
-| Tests | 168 (pytest), CI on every PR |
+| Median reply latency | **2.5 s** (p95 3.5 s, no cold start); was 5.7 s median with local `gemma4:31b` on an RTX 5090 |
+| Model cost | **$0** within the free quota (15 requests/minute for the reply model; one customer message averages 1.8) |
+| Tests | 237 (pytest), CI on every PR |
 
 Deployed as a user-level systemd service; the owner's shop kept running through every change.
 

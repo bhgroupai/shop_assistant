@@ -11,15 +11,18 @@ MAX_RESULTS = 5            # FR-18
 FETCH_LIMIT = 500          # FR-1
 CATEGORIES = ["kiyim", "poyabzal", "aksessuar", "boshqa"]   # SDD §2.2
 HISTORY_TURNS = 10         # FR-17
-EXTRACT_BATCH = 5          # NFR-3; TODO(#23): measure 5 vs 10 vs 20 on Gemini (scripts/spike_gemini.py) and keep the largest 100%-valid size
+EXTRACT_BATCH = 20         # NFR-3; spike 2026-09-23: 5/10/20 all 100% valid → 20 (7 requests for 134 posts)
 MIN_PRICE = 10_000         # so'm; smaller "prices" from the model are junk → None
 EMBED_BATCH = 128          # NFR-3
 
 # Gemini API, free tier, via google-genai (SDD §1.1, SRS C-2). Agent + extraction; shared client in llm.py.
-# TODO(#23): confirm this is the current free-tier Flash model and fill in its limits from
-#   AI Studio -> Rate limits (do not copy numbers from memory or blog posts):
-#   requests/minute = ?, requests/day = ?   (one customer message averages 1.8 requests, max 4)
-GEMINI_MODEL = "gemini-2.5-flash"
+# Measured 2026-09-23 on the free key: gemini-3.5-flash / 2.5-flash = 5 requests/minute (429 quotaValue),
+#   too few for customers (1.8 requests per message, max 4); 3.5-flash-lite took 16 requests in 15 s with
+#   no 429, median 0.77 s, and called find_products on 10/10 spike runs. Extraction is offline and ~7
+#   requests a night, so it uses the stronger model (fewer mis-categorised items than flash-lite).
+# TODO: requests/day per model — read from AI Studio -> Rate limits (not exposed by the API).
+GEMINI_MODEL = "gemini-3.5-flash-lite"   # customer agent
+GEMINI_EXTRACT_MODEL = "gemini-3.5-flash"   # post extraction
 MAX_ITERATIONS = 8               # model requests per customer turn
 EMBED_MODEL = "bge-m3"           # Ollama, multilingual embeddings, 1024-d — until #23.5
 GEMINI_DAILY_LIMIT = 250        # free-tier requests/day shown by /stats (#17); TODO(#23): set from AI Studio

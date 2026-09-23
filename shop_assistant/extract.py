@@ -58,7 +58,8 @@ def strip_footer(caption: str) -> str:
 
 # --- FR-3b: price notation ---------------------------------------------------
 
-_PRICE_RE = re.compile(r"(\d{1,3}(?:[.\s]\d{3})+|\d+)\s*(ming|минг|k)?", re.IGNORECASE)
+# One separator per number: "630.000 399.000" (old/new price) is two numbers, not 630000399000.
+_PRICE_RE = re.compile(r"(\d{1,3}(?:\.\d{3})+|\d{1,3}(?: \d{3})+|\d+)\s*(ming|минг|k)?", re.IGNORECASE)
 
 
 def parse_price(s: str) -> int | None:
@@ -308,7 +309,7 @@ def _generate(contents: str):
     for attempt in range(RETRIES):
         try:
             return llm.client().models.generate_content(
-                model=config.GEMINI_MODEL, contents=contents, config=_request_config())
+                model=config.GEMINI_EXTRACT_MODEL, contents=contents, config=_request_config())
         except (errors.APIError, httpx.TransportError) as e:
             if not _is_transient(e) or attempt == RETRIES - 1:
                 raise

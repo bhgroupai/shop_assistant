@@ -28,6 +28,7 @@ def test_strip_footer_empty():
     ("1.200.000", 1200000),
     ("980 000 so'm", 980000),
     ("980k", 980000),
+    ("Shim 630.000 399.000", 630000),        # post 793: old/new price, emoji stripped — two numbers, not one
     ("narxi so'rang", None),
     ("", None),
 ])
