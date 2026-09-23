@@ -233,17 +233,30 @@ def _fmt_price(p: str, code: str = lang.DEFAULT) -> str:
     return _PRICE_WORD.sub("", p)
 
 
+_NUMBERED = re.compile(r"^(\d+)\. (.+)$", re.MULTILINE)
+
+
+def _numbered_lines(reply: str) -> list[tuple[int, str]]:
+    """[(item number, rest of the line)] of the numbered lines of `reply`, in order."""
+    return [(int(m.group(1)), m.group(2)) for m in _NUMBERED.finditer(reply or "")]
+
+
+def _first_number(reply: str) -> int:
+    """The number of the first numbered line (6 on a second page, #25); 1 when there is none."""
+    lines = _numbered_lines(reply)
+    return lines[0][0] if lines else 1
+
+
 def carousel_caption(reply: str, current: int, lang: str = lang.DEFAULT) -> str:
-    """Card for item `current+1` of the numbered `reply` (0-based): title line `N. name`, then
-    price, sizes (omitted when '-'), date and a stale warning when the line carries one; labels and
-    the note from lang.TEXTS[lang] (#24). Falls back to the whole reply when that line does not exist.
-    Cut to CAPTION_LIMIT."""
+    """Card for the `current`-th numbered line of `reply` (0-based position, not the number, #25): title
+    line `N. name` with the line's own number, then price, sizes (omitted when '-'), date and a stale
+    warning when the line carries one; labels and the note from lang.TEXTS[lang] (#24). Falls back to the
+    whole reply when that line does not exist. Cut to CAPTION_LIMIT."""
     t = _texts(lang)
-    n = current + 1
-    m = re.search(rf"^{n}\. (.+)$", reply or "", re.MULTILINE)
-    if not m:
+    lines = _numbered_lines(reply)
+    if not 0 <= current < len(lines):
         return (reply or "")[:CAPTION_LIMIT]
-    line = m.group(1)
+    n, line = lines[current]
     stale = "eskirgan" in line.lower()
     line = re.sub(r"\s*\(.*?\)\s*$", "", line)          # trailing "(… eskirgan …)" note
     parts = [p.strip() for p in line.split(" · ")]
@@ -303,8 +316,10 @@ def _url(text: str, url: str):
     return Button.url(text, url)
 
 
-def carousel_buttons(idx: int, ids: list[int], ask_price: bool, lang: str = lang.DEFAULT) -> list[list]:
-    """Inline keyboard rows: row 0 = ◀ · `<idx+1>/<n>` · ▶ (omitted when n == 1);
+def carousel_buttons(idx: int, ids: list[int], ask_price: bool, lang: str = lang.DEFAULT,
+                     first: int = 1) -> list[list]:
+    """Inline keyboard rows: row 0 = ◀ · `<first+idx>/<first+n-1>` · ▶ (omitted when n == 1; `first` is the
+    number of the reply's first item, 6 on a second page, #25; callback data stays position-based);
     last row = ask-price (only when ask_price) + view-in-channel url button, labels in `lang` (#24)."""
     t = _texts(lang)
     n = len(ids)
@@ -312,7 +327,7 @@ def carousel_buttons(idx: int, ids: list[int], ask_price: bool, lang: str = lang
     if n > 1:
         rows.append([
             _inline("◀", carousel_data("c", (idx - 1) % n, ids)),
-            _inline(f"{idx + 1}/{n}", carousel_data("c", idx, ids)),
+            _inline(f"{first + idx}/{first + n - 1}", carousel_data("c", idx, ids)),
             _inline("▶", carousel_data("c", (idx + 1) % n, ids)),
         ])
     last: list = []
@@ -384,9 +399,10 @@ async def _media_for(client, ids: list[int]) -> dict[int, object]:
 
 
 def _ask_price_on(reply: str, number_idx: int) -> bool:
-    """True when the `<number_idx+1>. …` line of `reply` has no price (the ask-price phrase in any language)."""
-    prefix = f"{number_idx + 1}. "
-    return any(line.startswith(prefix) and _is_ask_price(line) for line in (reply or "").split("\n"))
+    """True when the `number_idx`-th numbered line of `reply` (0-based position, #25) has no price
+    (the ask-price phrase in any language)."""
+    lines = _numbered_lines(reply)
+    return 0 <= number_idx < len(lines) and _is_ask_price(lines[number_idx][1])
 
 
 async def send_reply(event, reply: str, lang: str = lang.DEFAULT) -> None:
@@ -402,7 +418,8 @@ async def send_reply(event, reply: str, lang: str = lang.DEFAULT) -> None:
                 msg = await event.client.send_file(
                     event.chat_id, media[ids[0]],
                     caption=carousel_caption(reply, idx, lang),
-                    buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx), lang),
+                    buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx), lang,
+                                             first=_first_number(reply)),
                     reply_to=event.message.id)
                 _remember_placeholder(media[ids[0]], msg)
                 if msg is not None and getattr(msg, "id", None) is not None:
@@ -450,7 +467,8 @@ async def handle_callback(event) -> None:
             return
         reply = _captions.get(event.message_id) or _rebuild_reply(ids)
         msg = await event.edit(carousel_caption(reply, idx, code), file=media[ids[idx]],
-                               buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx), code),
+                               buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx), code,
+                                                        first=_first_number(reply)),
                                link_preview=False)
         _remember_placeholder(media[ids[idx]], msg)
         await event.answer()
