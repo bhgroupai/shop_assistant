@@ -268,7 +268,8 @@ def test_resolve_uses_the_default_store(monkeypatch, tmp_path):
 
 KEYS = {"greeting", "ask_price_button", "view_in_channel_button", "stale_note", "escalated_reply",
         "callback_toast", "callback_error", "error_reply", "ask_price", "offer_price",
-        "price_label", "sizes_label", "date_label"}
+        "price_label", "sizes_label", "date_label",
+        "owner_said"}   # ticket #23.7: label on FAQ answers ("egasi aytgan")
 
 
 def _has_cyrillic(s: str) -> bool:

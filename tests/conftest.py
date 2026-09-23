@@ -17,6 +17,15 @@ def _languages_file(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "LANGUAGES_PATH", tmp_path / "languages.json", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _faq_files(monkeypatch, tmp_path):
+    """Ticket #23.7: the FAQ store never touches the real data/faq*.{jsonl,npy,json} in tests;
+    each test starts with an empty store under its own tmp dir."""
+    monkeypatch.setattr(config, "FAQ_PATH", tmp_path / "faq" / "faq.jsonl")
+    monkeypatch.setattr(config, "FAQ_EMBEDDINGS_PATH", tmp_path / "faq" / "faq_embeddings.npy")
+    monkeypatch.setattr(config, "FAQ_META_PATH", tmp_path / "faq" / "faq_embeddings_meta.json", raising=False)
+
+
 FOOTER = "\n\n📍Manzil: Shahar markazi\n📞 +998 00 000 00 00\n@example_shop\n🚚 Dastavka bor"
 
 CAPTION_DVOYKA = (

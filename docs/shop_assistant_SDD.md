@@ -19,8 +19,9 @@ Six stages, one Python module each, every module runnable on its own (NFR-7). Da
       │ index.py (Gemini embed)                                 ├─ semantic_search┘
       ▼                                                         ├─ latest_posts
  data/embeddings.npy + _ids.json + _meta.json ◀─────────────────┤
-                                                                ├─ search_faq ──▶ data/faq.jsonl
+                                                                ├─ search_faq ──▶ faq.py ──▶ data/faq.jsonl + faq_embeddings*
                                                                 └─ ask_owner ───▶ owner (same bot) ──reply──▶ customer
+                                                                                   (the reply is also saved: faq.add)
 ```
 
 ### 1.1 Technology
@@ -67,7 +68,9 @@ All files live in `shop_assistant/data/` (gitignored). One JSON object per line.
 ```json
 {"ts": "...", "question": "dastavka Samarqandga qancha?", "answer": "35 ming, 2 kun", "post_ids": [1234]}
 ```
-FAQ entries are embedded too (separate `faq_embeddings.npy`), so `search_faq` is semantic.
+Append-only, UTF-8, one line per relayed owner answer (`question` = the escalated customer question, `post_ids` = the post links of the `#esc` message). Written and read only by `faq.py` (§3.5a).
+
+Next to it (#23.7): `faq_embeddings.npy` — `float32[n, EMBED_DIM]`, row *i* = `index.embed([normalise(question of line i)], kind="document")`; lines `n…` of `faq.jsonl` have no row yet ("pending") and are embedded by the next successful `add` / `search`. `faq_embeddings_meta.json` (`config.FAQ_META_PATH`) = `{"model", "dim", "n"}` of that matrix — the same guard as §2.3: an `.npy` without meta or built by another model / dimension is never used or extended until `python -m shop_assistant.faq` rebuilds it.
 
 ### 2.5 `state.json`
 `{"last_post_id": 1234, "last_index_at": "2026-09-24T03:00:41"}` — drives incremental ingestion (FR-7) and `/stats` (FR-26). `last_post_id` is written by the fetch step; `last_index_at` only by a nightly run whose every step succeeded (a night with nothing new counts), other keys kept.
@@ -126,9 +129,17 @@ def search_faq(text, limit=3) -> list[FaqEntry]
 - **Fail fast on the query path:** if the query embedding fails (429, 5xx, timeout, invalid or missing key) `semantic_search` returns `[]` with one WARNING and never raises; the agent carries on as on any empty search (filters or `ask_owner`).
 - CLI: `python -m shop_assistant.search "krosovka 42"` prints both filter and semantic results (FR-24).
 
+### 3.5a `faq.py` — FR-22 (#23.7)
+- `load()`, `add(question, answer, post_ids=(), ts=None)`, `search(query, k=3)`, `reindex()`; files §2.4, paths read from `config` at call time.
+- `add` appends the line **first**, then embeds all pending questions in one `index.embed(..., kind="document", retry=False)` call and rewrites `.npy` + meta. Any embedding error is logged, never raised (it runs inside the bot, no sleeping retries); the line stays saved and is embedded later.
+- `search` first tries to embed pending entries (failure → go on with the existing rows), then embeds `normalise(query)` with `kind="query"` and returns entries with cosine ≥ `faq.THRESHOLD`, best first, at most `k`. Query embedding fails → `[]` + one WARNING. No rows → `[]` without a request. Model / dimension mismatch → `[]` + one ERROR, no request.
+- `THRESHOLD` measured with `gemini-embedding-001` on owner-style questions vs paraphrases (uz Latin / ru) and unrelated product questions — numbers next to the constant.
+- CLI: `python -m shop_assistant.faq` = `reindex()` (all entries, retries allowed), the fix after an embedding-model change. `search.search_faq` / `index.reindex_faq` stay as unused stubs.
+
 ### 3.6 `tools.py` — the agent's interface
 Thin wrappers around §3.5, declared with the plain `tools.tool` decorator (no SDK dependency): each `TOOLS` entry has `name`, `description` and `input_schema` built from the function signature and its docstring (`Args:` section), plus `call(args) -> str`. `llm.tool_declarations` turns them into Gemini function declarations. They return compact text (one line per product: `name · price · sizes · date · link · [eskirgan]`), plus:
 - `ask_owner(question: str, post_ids: list[int]) -> str` — calls `bot.escalate(...)` through `run_coroutine_threadsafe` (same thread-bridge as `tgclient.run`). Returns `"forwarded"`.
+- `search_faq_tool(text) -> str` — `faq.search(text)`; one line per hit `<question> — <owner_said>: <answer>` (`owner_said` = `lang.TEXTS[l]["owner_said"]` for the chat's stored language, e.g. "egasi aytgan"), never the product format (no numbering, no links); no hits → `"no faq entries"`.
 
 ### 3.7 `agent.py` — FR-13…FR-18, FR-20
 - `run_agent(chat_id, text, history=None, lang="uz_latn") -> str`, blocking, run in a worker thread.
@@ -138,6 +149,7 @@ Thin wrappers around §3.5, declared with the plain `tools.tool` decorator (no S
   2. First `find_products`; if empty and the question has a descriptive part, `semantic_search`. For delivery/payment/other shop questions, `search_faq`.
   3. Never state price, size or availability not in tool output. Never guess stock.
   4. Escalate with `ask_owner` when: stock/availability asked, nothing relevant found, or question is outside the catalog.
+  4a. **search_faq_tool before ask_owner** (#23.7) for delivery / payment / address / hours / other shop questions: an FAQ hit is answered as what the owner said (the `owner_said` label in the chat's language), never as catalog data, and is not escalated; only "no faq entries" leads to `ask_owner`.
   5. Max 5 products per reply; if more, ask the customer to narrow down. Always include links. Mark stale posts with the "may be sold out" note.
 - Manual function-calling loop over `llm.client().models.generate_content` (automatic function calling **off**): each model `function_call` runs the matching `TOOLS` entry, the model turn and the `function_response` are appended, repeat until the model answers with text or `config.MAX_ITERATIONS = 8` requests were made (then the polite apology). Tool declarations come from `TOOLS` via `llm.tool_declarations` (single source of truth). History keeps the `{"role": "user"|"assistant", "content": str}` format; assistant turns are sent to Gemini as role `model`. Timeout `llm.AGENT_TIMEOUT_S` (15 s) per request.
 - `agent.last_run` = `{"tools": [{name, input, n_results}], "escalated", "usd": 0.0, "llm_calls"}` for `bot.py` / eval.
@@ -149,7 +161,7 @@ Thin wrappers around §3.5, declared with the plain `tools.tool` decorator (no S
   - **Carousel reply (S4, #19).** When the agent's text names posts, the customer gets ONE message: item 1's photo/video (the channel logo when the post has none), a card caption (`N. name` / `Narxi:` / `O'lcham:` / `Sana:` / stale warning) and inline buttons `◀ · N/n · ▶`, `Narxini so'rash` (only when the item has no price → `escalate` with that post id), `Kanalda ko'rish`. `CallbackQuery` edits the message in place; callback data `c:<idx>:<ids>` is self-contained (≤ 64 bytes) so navigation survives restarts. Text-only fallback (no link preview) when the send fails. The agent's numbered text still carries every link (FR-11/FR-14, eval parses ids) — it is the caption source, not shown as a list.
   - **Customer language (#24, FR-13a).** Before each customer message `lang.resolve(chat_id, text, sender.lang_code)`: a clear detection from the text wins and is stored; otherwise the stored language; on first contact Telegram's `lang_code` (`ru` → ru, else uz_latn). `/start` is answered with `lang.TEXTS[l]["greeting"]` and no LLM call. Carousel labels, buttons, stale note, escalation/error replies and callback toasts use `lang.TEXTS` for the chat's language (callbacks read the store). Owner-facing texts (`#esc`, hints) stay Uzbek.
   - `escalate(customer_id, question, post_ids)` → message to `TG_OWNER_ID`: `"#esc <customer_id>\n<question>\n<links>"`. Tells the customer "Egasi tez orada javob beradi".
-  - `NewMessage` from owner **that is a reply** to an `#esc` message → parse `customer_id` from the quoted text → forward owner's text to the customer → append to `faq.jsonl` → `index.reindex_faq()`.
+  - `NewMessage` from owner **that is a reply** to an `#esc` message → parse `customer_id` from the quoted text → forward owner's text to the customer → `faq.add(question, answer, post_ids)` (#23.7; `question` = the quoted `#esc` text without its header and link lines, `post_ids` = `post_ids_in(quoted)`, run in a worker thread). A `faq.add` failure is logged and never blocks the relay.
   - `/stats` from owner only → counts from `state.json` and today's `log.jsonl`.
 - Logs every turn to `log.jsonl` (FR-25).
 
@@ -159,7 +171,7 @@ Thin wrappers around §3.5, declared with the plain `tools.tool` decorator (no S
 - `TEXTS[lang][key]`: every customer-facing fixed text (greeting, buttons, stale note, escalation/error replies, callback toasts, ask-price phrase, offer line, card labels).
 
 ### 3.9 `config.py`
-`CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`GEMINI_MODEL` for the agent, `GEMINI_EXTRACT_MODEL` for extraction — free-tier Flash models; measured limits written next to them; `EMBED_MODEL = "gemini-embedding-001"`, `EMBED_DIM = 768`, `EMBED_BATCH = 100`), `MAX_ITERATIONS = 8`, paths (incl. `EMBEDDINGS_META_PATH`, `LANGUAGES_PATH = DATA_DIR / "languages.json"`). From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `GEMINI_API_KEY` (read lazily with `secret()`). `llm.py` holds the shared Gemini client, `tool_declarations()` and the timeouts.
+`CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`GEMINI_MODEL` for the agent, `GEMINI_EXTRACT_MODEL` for extraction — free-tier Flash models; measured limits written next to them; `EMBED_MODEL = "gemini-embedding-001"`, `EMBED_DIM = 768`, `EMBED_BATCH = 100`), `MAX_ITERATIONS = 8`, paths (incl. `EMBEDDINGS_META_PATH`, `FAQ_PATH`, `FAQ_EMBEDDINGS_PATH`, `FAQ_META_PATH`, `LANGUAGES_PATH = DATA_DIR / "languages.json"`). From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `GEMINI_API_KEY` (read lazily with `secret()`). `llm.py` holds the shared Gemini client, `tool_declarations()` and the timeouts.
 
 ### 3.10 `main.py`
 Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service (D-7): it is `ingest.py` on its own timer (§3.11); the bot notices the new files by itself (`search.reload_if_changed`). `/reindex` (`search.reload()`) stays for a manual re-index.
@@ -192,7 +204,7 @@ shop_assistant/                   # repo root; run everything from here
   docs/shop_assistant_SRS.md, shop_assistant_SDD.md
   shop_assistant/                 # the package: `python -m shop_assistant.fetch`
     config.py  models.py  textnorm.py  fetch.py  extract.py  index.py  search.py
-    llm.py     tools.py   agent.py    bot.py      main.py    lang.py   ingest.py
+    llm.py     tools.py   agent.py    bot.py      main.py    lang.py    faq.py    ingest.py
   eval/questions.jsonl        # 20 questions, expected: {"posts":[ids]} or {"escalate":true}
   eval/run_eval.py            # runs agent offline (ask_owner stubbed), prints AC-2..AC-4
   tests/                      # only tests for merged work; a ticket's tests live on its branch until merged
@@ -212,7 +224,7 @@ shop_assistant/                   # repo root; run everything from here
 | FR-8, 9, 10, 11, 12 | search.py, textnorm.py |
 | FR-13–18, 20 | agent.py (system prompt + history) |
 | FR-13, 13a | lang.py (detection, per-chat store, fixed texts), bot.py, agent.py (answer-in line) |
-| FR-19, 21, 22 | bot.py `escalate` + owner-reply handler, tools.ask_owner |
+| FR-19, 21, 22 | bot.py `escalate` + owner-reply handler, tools.ask_owner; faq.py + tools.search_faq_tool (FR-22) |
 | FR-23, 24 | CLIs of fetch/extract/index/search; nightly `ingest.py` on a systemd timer |
 | FR-25, 26 | bot.py logging, `/stats` |
 | NFR-1, 2 | Gemini free-tier Flash model, max_iterations=8, compact tool output |
@@ -234,6 +246,7 @@ shop_assistant/                   # repo root; run everything from here
 - Category list too narrow → `boshqa` bucket; review after first extract run.
 - Customer sends a photo/voice only → agent gets `<media>`; reply asking for text (v1), photo search is out of scope.
 - Owner forgets to *reply* to the `#esc` message → bot answers the owner with a hint.
+- FAQ search by cosine cannot tell "dastavka Toshkentga qancha?" from the stored Samarqand question (0.83, above `faq.THRESHOLD = 0.75`) → the tool line carries the stored question and the prompt uses an answer only when it fits; watch escalations vs FAQ answers in `log.jsonl`.
 
 ## 8. Change Log
 | Version | Date | Change |
@@ -248,5 +261,6 @@ shop_assistant/                   # repo root; run everything from here
 | 0.7 | 2026-09-23 | #17: owner `/stats` (indexed posts, last index, questions/escalations today, `Gemini: N / GEMINI_DAILY_LIMIT today` from `log.jsonl` + `gemini_ingest.jsonl`) and `/reindex` (`search.reload()`); §2.6 `log.jsonl` gains `llm_calls`; `run()` dispatches through `bot.route` |
 | 1.0 | 2026-09-23 | #23.5: embeddings on the Gemini API (`gemini-embedding-001`, 768-d, `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY` task types, L2-normalised, batches ≤ 100); `embeddings_meta.json` + load guard against mixed models; query path fails fast (empty + WARNING), index CLI retries; tools are plain definitions (no Anthropic SDK); Ollama and `bge-m3` gone; §1, §1.1, §2.3, §3.3, §3.5, §3.6, §3.9, D-3, §7 updated |
 | 1.1 | 2026-09-23 | SRS v0.5 FR-13a (#24): new `lang.py` (§3.8a: language detection, per-chat store, `TEXTS`), `data/languages.json` (§2.7), `config.LANGUAGES_PATH`; §3.7 explicit "Answer in …" line + `run_agent(lang=)`; §3.8 `/start` greeting without LLM, localized carousel/escalation/error texts |
+| 1.2 | 2026-09-23 | R2 FAQ store (#23.7, FR-22): new `faq.py` (§3.5a) with `faq.jsonl` + `faq_embeddings.npy` + `faq_embeddings_meta.json` (§2.4, `config.FAQ_META_PATH`), model guard as for products, measured `faq.THRESHOLD`; §3.6 `search_faq_tool` uses `faq.search` and labels answers with `lang.TEXTS[l]["owner_said"]`; §3.7 rule "search_faq_tool before ask_owner"; §3.8 the owner's relayed answer is saved with `faq.add` (failure never blocks the relay) |
 | 0.4 | 2026-09-17 | SRS C-2 v0.4: Claude + Voyage replaced by Ollama on the GPU server (`gemma4:31b`, `bge-m3`); §1.1, §3.2, §3.3, §3.7, §3.9, §7 updated; deploy target = the GPU server |
 | 1.3 | 2026-09-23 | #18: nightly ingestion — new `ingest.py` (§3.11: fetch → extract pending → `index.update_index()` → `state.last_index_at`, `False`/exit 1 on a failed step) on a oneshot unit + `deploy/shop-assistant-ingest.timer` (03:00, `Persistent=true`); §3.3 incremental `update_index()` + `ModelMismatch`; §3.5 `search.reload_if_changed()` (os.stat signature, no bot restart); §2.6a `gemini_ingest.jsonl`; §3.2 `extract.main()` returns success; D-7 timer, not the bot |

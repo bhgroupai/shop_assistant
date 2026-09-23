@@ -6,7 +6,7 @@ import types
 import typing
 from typing import Any, Callable
 
-from shop_assistant import config, search
+from shop_assistant import config, faq, lang, search
 from shop_assistant.models import FaqEntry, Product
 
 
@@ -114,8 +114,16 @@ def format_products(products: list[Product]) -> str:
     return "\n".join(lines)
 
 
-def _format_faq(entry: FaqEntry) -> str:
-    return f"{entry.question} — {entry.answer}".replace("\n", " ")
+def _format_faq(entry: FaqEntry, owner_said: str) -> str:
+    """One line `<question> — <owner_said>: <answer>` (#23.7): an owner's words, never product data."""
+    return f"{entry.question} — {owner_said}: {entry.answer}".replace("\n", " ")
+
+
+def _chat_lang() -> str:
+    """Stored language of the chat the agent is answering (agent.current_chat_id), default uz_latn."""
+    from shop_assistant import agent   # lazy: agent imports this module
+    stored = lang.get_store().get(agent.current_chat_id.get())
+    return stored if stored in lang.TEXTS else lang.DEFAULT
 
 
 @tool
@@ -177,8 +185,11 @@ def search_faq_tool(text: str) -> str:
     Args:
         text: The customer's question, in any language or script.
     """
-    entries = search.search_faq(text, limit=config.MAX_RESULTS)
-    return "\n".join(_format_faq(e) for e in entries) or NO_FAQ
+    entries = faq.search(text)
+    if not entries:
+        return NO_FAQ
+    owner_said = lang.TEXTS[_chat_lang()]["owner_said"]
+    return "\n".join(_format_faq(e, owner_said) for e in entries)
 
 
 @tool
