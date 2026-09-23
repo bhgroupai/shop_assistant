@@ -1,6 +1,6 @@
 # Software Requirements Specification — Shop Assistant
 
-Version 0.4 · 2026-09-16 · Status: draft
+Version 0.5 · 2026-09-23 · Status: draft
 
 ## 1. Introduction
 
@@ -54,7 +54,7 @@ Customer ◀──Telegram bot──▶ Agent ──tools───────�
 
 ### 2.4 Constraints
 - C-1 The system is built from scratch for learning purposes: no off-the-shelf agent or RAG framework may be used.
-- C-2 Language model and embeddings run **locally** on the company's own GPU server (Ollama on a GPU server): no paid hosted API. Models must be multilingual (uz-Latin, uz-Cyrillic, ru).
+- C-2 All language-model work (customer agent, post extraction and, from #23.5, embeddings) uses a hosted model on the **free tier** of the Gemini API; no local models and no paid API. Models must be multilingual (uz-Latin, uz-Cyrillic, ru). Privacy trade-off, decided by Sanjarbek on 2026-09-23: customer questions and channel captions are sent to Google, and on the free tier Google may use prompts to improve its products. Customers' messages therefore no longer stay on the company's server.
 - C-5 The bot answers only in private chats; it does not respond in groups or the channel.
 - C-3 Runs unattended on a single Linux server.
 - C-4 All catalog data comes from the channel; no manual product entry in v1.
@@ -113,8 +113,8 @@ Customer ◀──Telegram bot──▶ Agent ──tools───────�
 | ID | Requirement |
 |---|---|
 | NFR-1 | Median reply time ≤ 8 s; 95th percentile ≤ 20 s. |
-| NFR-2 | No per-question API cost (local models). A customer question shall use ≤ 8 000 input tokens on average so the GPU stays free for other services. |
-| NFR-3 | Ingestion of 500 posts shall complete in ≤ 30 min on the local server with no API cost. |
+| NFR-2 | No per-question API cost within the free quota of the hosted model. A customer question shall use ≤ 8 000 input tokens on average so a day's traffic fits the free quota. When the daily quota is used up the bot answers "try again later" until it resets (no paid fallback). |
+| NFR-3 | Ingestion of 500 posts shall complete in ≤ 30 min with no API cost (within the free quota); to be re-measured against the hosted model. |
 | NFR-4 | No customer messages are persisted beyond the log file; no personal data is sent to the owner except the question text. |
 | NFR-5 | The service restarts automatically after a crash. |
 | NFR-6 | Secrets (bot token, API keys, session) are stored outside the source code and never committed to version control. |
@@ -146,4 +146,5 @@ Customer ◀──Telegram bot──▶ Agent ──tools───────�
 | 0.1 | 2026-09-16 | Initial draft |
 | 0.3 | 2026-09-16 | Q-2…Q-5 closed: developer plays owner (A-4), Voyage embeddings (C-2), private chats only (C-5), 60-day threshold (FR-16) |
 | 0.4 | 2026-09-17 | C-2: local models (Ollama on own GPU server) instead of Claude + Voyage; NFR-2/NFR-3 cost limits replaced by token/time limits |
+| 0.5 | 2026-09-23 | C-2: no local models — agent and extraction use a hosted Gemini free-tier model (embeddings follow in #23.5); customer questions and captions now go to Google (privacy trade-off accepted by Sanjarbek for faster replies without a local GPU); NFR-2 "no cost within the free quota"; NFR-3 to be re-measured |
 | 0.2 | 2026-09-16 | Channel chosen (the shop channel); assumptions A-1/A-2/A-5/A-6 and FR-3a/3b added from sample posts; Q-1 closed |

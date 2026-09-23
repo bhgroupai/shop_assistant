@@ -5,8 +5,11 @@ whose **catalog is its Telegram channel** — no database, no website, no produc
 channel's posts, turns them into product records, searches them, replies with a photo carousel in
 the customer's own language, and asks the owner when it does not know.
 
-Runs entirely on a **local GPU** (Ollama): no per-message API cost, no customer data leaving the
-shop's server. Built from scratch — no LangChain, no vector database, no agent framework.
+The language model is a hosted **Gemini free-tier** model: no per-message API cost within the free
+quota and no GPU to keep warm. **Privacy note:** customer questions and channel captions are sent to
+Google, and on the free tier Google may use prompts to improve its products — a trade-off chosen on
+2026-09-23 for faster replies (SRS C-2). Embeddings still run on a local Ollama host until #23.5.
+Built from scratch — no LangChain, no vector database, no agent framework.
 
 ![Architecture: channel → fetch → extract → index; customer → bot → agent → tools, with escalation to the owner](docs/architecture.svg)
 
@@ -38,7 +41,7 @@ because a Telegram channel has no stock field.
 
 ## Results
 
-Measured on 2026-09-22 by a 20-question eval suite (real customer phrasings in Uzbek Latin, Uzbek Cyrillic and
+Measured on 2026-09-22 with the previous local model (`gemma4:31b`; not yet re-run on Gemini) by a 20-question eval suite (real customer phrasings in Uzbek Latin, Uzbek Cyrillic and
 Russian, including questions the bot is supposed to escalate rather than answer):
 
 | Metric | Result |
@@ -47,7 +50,7 @@ Russian, including questions the bot is supposed to escalate rather than answer)
 | Invented prices or sizes | **0** |
 | Questions only semantic search could answer | 4 of 20 |
 | Median reply latency | **5.7 s** on one RTX 5090 (typical p95 ~9 s; a cold model load pushes the first call to ~25 s) |
-| Model cost | **$0** — local `gemma4:31b` + `bge-m3` |
+| Model cost | **$0** — local `gemma4:31b` + `bge-m3` at the time; now Gemini free tier (no cost within the free quota) |
 | Tests | 168 (pytest), CI on every PR |
 
 Deployed as a user-level systemd service; the owner's shop kept running through every change.
@@ -67,7 +70,7 @@ Deployed as a user-level systemd service; the owner's shop kept running through 
    `krossovka`, `кроссовка` and `krosovka` hit the same records.
 5. **`search.py`** — filters first (exact, explainable, fast), embeddings only as a fallback; every
    result carries its staleness flag.
-6. **`agent.py`** — a hand-written tool-calling loop (Anthropic SDK pointed at Ollama) with five
+6. **`agent.py`** — a hand-written tool-calling loop (Gemini function calling via `google-genai`, automatic calling off) with five
    tools: `find_products`, `semantic_search`, `latest_posts`, `search_faq`, `ask_owner`. The system
    prompt forbids numbers that are not in a tool result — the reason the invented-price count is 0.
 7. **`bot.py`** — the customer/owner Telegram surface: carousel replies, inline navigation,
@@ -80,14 +83,14 @@ Everything is plain Python: 1 600 lines across 12 modules, JSONL storage, no fra
 
 ```bash
 uv venv && uv pip install -r requirements.txt
-cp .env.example .env          # TG_CHANNEL, Telegram api id/hash, bot token, owner id, OLLAMA_URL
+cp .env.example .env          # TG_CHANNEL, Telegram api id/hash, bot token, owner id, GEMINI_API_KEY, OLLAMA_URL
 uv run python -m shop_assistant.fetch     # channel → data/posts.jsonl
 uv run python -m shop_assistant.extract   # posts → data/products.jsonl
 uv run python -m shop_assistant.index     # products → data/embeddings.npy
 uv run python -m shop_assistant.main      # start the bot
 ```
 
-Needs an Ollama host with `gemma4:31b` and `bge-m3` (`OLLAMA_URL`). `./deploy.sh` rsyncs the repo
+Needs a Gemini API key from Google AI Studio (`GEMINI_API_KEY`, free tier) and, until #23.5, an Ollama host with `bge-m3` (`OLLAMA_URL`). `./deploy.sh` rsyncs the repo
 to `DEPLOY_HOST` and installs the systemd unit.
 
 ## Docs
