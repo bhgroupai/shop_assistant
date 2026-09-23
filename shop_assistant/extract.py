@@ -3,6 +3,7 @@ import dataclasses
 import json
 import logging
 import re
+import sys
 import time
 import unicodedata
 
@@ -303,10 +304,17 @@ def _is_transient(e: Exception) -> bool:
     return isinstance(e, httpx.TransportError)
 
 
-def _generate(contents: str):
-    """One generate_content request, retried with exponential backoff on transient errors.
+# Set by ingest.run() for the nightly run (#18): called once per HTTP request, retries and failed attempts
+# included, as on_request("extract", model, n_posts). None outside the nightly run.
+on_request = None
+
+
+def _generate(contents: str, n: int = 1):
+    """One generate_content request (`n` posts), retried with exponential backoff on transient errors.
     The last error is re-raised, so the caller writes nothing for this batch."""
     for attempt in range(RETRIES):
+        if on_request is not None:
+            on_request("extract", config.GEMINI_EXTRACT_MODEL, n)
         try:
             return llm.client().models.generate_content(
                 model=config.GEMINI_EXTRACT_MODEL, contents=contents, config=_request_config())
@@ -321,7 +329,7 @@ def _generate(contents: str):
 
 def _call_llm(posts: list[Post], bodies: dict[int, str]) -> dict[int, dict]:
     user = "\n\n".join(f"### id={p.id}\n{bodies[p.id]}" for p in posts)
-    resp = _generate(user)
+    resp = _generate(user, len(posts))
     content = resp.candidates[0].content if resp.candidates else None
     calls = [p.function_call for p in (content.parts if content is not None else None) or []
              if p.function_call and p.function_call.name == _TOOL["name"]]
@@ -409,13 +417,14 @@ def _done_ids() -> set[int]:
     return ids
 
 
-def main() -> None:
-    """CLI: process posts not yet in products.jsonl."""
+def main() -> bool:
+    """CLI: process posts not yet in products.jsonl. True when every pending batch was written (or nothing was
+    pending); False when a batch failed after the retries (that batch and the rest stay pending) — #18."""
     done = _done_ids()
     todo = [p for p in _load_posts() if p.id not in done and p.caption.strip()]
     print(f"{len(done)} products already extracted; {len(todo)} posts to process")
     if not todo:
-        return
+        return True
     config.PRODUCTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     count = 0
     with config.PRODUCTS_PATH.open("a", encoding="utf-8") as f:
@@ -429,14 +438,15 @@ def main() -> None:
                 # this batch is written, so these posts stay un-extracted and the next run picks them up.
                 log.error("extraction stopped at batch %d-%d of %d (%s: %s); %d products written this run",
                           start + 1, start + len(chunk), len(todo), type(e).__name__, e, count)
-                return
+                return False
             dt = time.perf_counter() - t0
             f.write("".join(json.dumps(dataclasses.asdict(prod), ensure_ascii=False) + "\n" for prod in products))
             f.flush()
             count += len(products)
             print(f"{count}/{len(todo)} products  (batch of {len(chunk)} in {dt:.1f}s)")
+    return True
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    main()
+    sys.exit(0 if main() else 1)

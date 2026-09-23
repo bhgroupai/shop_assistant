@@ -39,10 +39,18 @@ def _is_transient(e: Exception) -> bool:
     return isinstance(e, (httpx.TransportError, TimeoutError, ConnectionError))
 
 
+# Set by ingest.run() for the nightly run (#18): called once per HTTP request, retries and failed attempts
+# included, as on_request("embed", model, n_texts). None otherwise, so customer query embeddings are never
+# counted as ingestion.
+on_request = None
+
+
 def _embed_batch(batch: list[str], task_type: str, retry: bool) -> list[list[float]]:
     """One embed_content request for `batch`; with `retry`, transient errors are retried with growing sleeps."""
     attempts = RETRIES if retry else 1
     for attempt in range(attempts):
+        if on_request is not None:
+            on_request("embed", config.EMBED_MODEL, len(batch))
         try:
             resp = llm.client().models.embed_content(
                 model=config.EMBED_MODEL, contents=list(batch),
@@ -143,6 +151,12 @@ def reindex() -> int:
     products = _load_products()
     ids = [p.id for p in products]
     matrix = embed([normalise(product_text(p)) for p in products], kind="document", retry=True)
+    _write_index(matrix, ids)
+    return len(products)
+
+
+def _write_index(matrix: np.ndarray, ids: list[int]) -> None:
+    """Rewrite embeddings.npy + embeddings_ids.json + embeddings_meta.json atomically, meta last."""
     meta = {"model": config.EMBED_MODEL, "dim": config.EMBED_DIM, "n": len(ids)}
 
     def _write_npy(tmp: str) -> None:
@@ -158,7 +172,58 @@ def reindex() -> int:
     _atomic_write(config.EMBEDDINGS_PATH, _write_npy)
     _atomic_write(config.EMBEDDINGS_IDS_PATH, _write_json(ids))
     _atomic_write(config.EMBEDDINGS_META_PATH, _write_json(meta))   # last: the matrix counts only once it exists
-    return len(products)
+
+
+class ModelMismatch(RuntimeError):
+    """The matrix on disk was built by another embedding model / dimension (or has no embeddings_meta.json):
+    only a full `python -m shop_assistant.index` may fix it, never the nightly run (ticket #18)."""
+
+
+def update_index() -> int:
+    """Incremental index for the nightly run (ticket #18; contract: tests/test_ingest.py docstring).
+    Embeds (retry=True) only products whose ids are not yet in the matrix, appends their rows, rewrites
+    matrix + ids + meta atomically (meta last). No matrix yet → builds it from all products. Matrix from
+    another model / dim or without meta → ModelMismatch, nothing embedded, nothing written.
+    Nothing new → 0, no request, no file touched. Returns the number of rows added."""
+    if not config.EMBEDDINGS_PATH.exists():
+        log.info("no embedding matrix yet: embedding all products")
+        return reindex()
+    old, old_ids = _load_existing_index()
+    known = set(old_ids)
+    new: list[Product] = []
+    for p in _load_products():
+        if p.id not in known:
+            known.add(p.id)          # a duplicated id in products.jsonl is embedded once
+            new.append(p)
+    if not new:
+        return 0
+    rows = embed([normalise(product_text(p)) for p in new], kind="document", retry=True)
+    _write_index(np.concatenate([old, rows]).astype(np.float32, copy=False), old_ids + [p.id for p in new])
+    return len(new)
+
+
+def _load_existing_index() -> tuple[np.ndarray, list[int]]:
+    """The matrix + ids on disk, checked against config.EMBED_MODEL / EMBED_DIM. Anything that would make
+    appended rows inconsistent with the existing ones → ModelMismatch (fix: a full manual re-index)."""
+    fix = "a full re-embed is `python -m shop_assistant.index`, run by hand (never by the nightly timer)"
+    path = config.EMBEDDINGS_META_PATH
+    if not path.exists():
+        raise ModelMismatch(f"{config.EMBEDDINGS_PATH.name} has no {path.name}, so its embedding model is "
+                            f"unknown (config: {config.EMBED_MODEL}, {config.EMBED_DIM}-d); {fix}")
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+        matrix = np.load(config.EMBEDDINGS_PATH)
+        ids = [int(i) for i in json.loads(config.EMBEDDINGS_IDS_PATH.read_text(encoding="utf-8"))]
+    except (OSError, ValueError, TypeError) as e:
+        raise ModelMismatch(f"cannot read the embedding index ({type(e).__name__}: {e}); {fix}") from e
+    model, dim = (meta.get("model"), meta.get("dim")) if isinstance(meta, dict) else (None, None)
+    if model != config.EMBED_MODEL or dim != config.EMBED_DIM:
+        raise ModelMismatch(f"{config.EMBEDDINGS_PATH.name} was built by {model} ({dim}-d), config wants "
+                            f"{config.EMBED_MODEL} ({config.EMBED_DIM}-d); {fix}")
+    if matrix.ndim != 2 or matrix.shape != (len(ids), config.EMBED_DIM):
+        raise ModelMismatch(f"{config.EMBEDDINGS_PATH.name} has shape {matrix.shape} but {len(ids)} ids and "
+                            f"dimension {config.EMBED_DIM}; {fix}")
+    return matrix.astype(np.float32, copy=False), ids
 
 
 def reindex_faq() -> int:

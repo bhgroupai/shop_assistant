@@ -1,0 +1,12 @@
+# Runs shop-assistant-ingest.service every night (ticket #18). Server local time is Asia/Tashkent.
+# Persistent=true: a night missed while the server was off runs right after boot.
+[Unit]
+Description=Nightly Shop Assistant ingestion
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+Unit=shop-assistant-ingest.service
+
+[Install]
+WantedBy=timers.target

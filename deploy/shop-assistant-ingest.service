@@ -1,0 +1,16 @@
+# Nightly ingestion (ticket #18, SDD §3.11, D-7): fetch new channel posts -> extract -> incremental index.
+# Started by shop-assistant-ingest.timer; installed by deploy.sh. A oneshot that exits 1 on a failed night.
+# It never touches the bot unit: the bot notices the new files itself (search.reload_if_changed).
+# Needs session/user (Telethon user account, created once by hand with `python -m shop_assistant.fetch`).
+[Unit]
+Description=Shop Assistant nightly ingestion (fetch, extract, index)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/shop_assistant
+ExecStart=%h/shop_assistant/.venv/bin/python -u -m shop_assistant.ingest
+Environment=PYTHONUNBUFFERED=1
+# Extraction + embedding retries back off for minutes at most; a hung run must not block the next night.
+TimeoutStartSec=1h

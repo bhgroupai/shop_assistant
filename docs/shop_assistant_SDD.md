@@ -1,13 +1,13 @@
 # Software Design Description — Shop Assistant
 
-Version 1.2 · 2026-09-23 · Status: draft · Implements: shop_assistant_SRS.md v0.5
+Version 1.3 · 2026-09-23 · Status: draft · Implements: shop_assistant_SRS.md v0.5
 
 ## 1. Overview
 
 Six stages, one Python module each, every module runnable on its own (NFR-7). Data flows left to right through files on disk; the bot process only reads them.
 
 ```
- offline (ingest, run by admin)                       online (bot service)
+ offline (ingest.py, nightly timer)                   online (bot service)
  ─────────────────────────────                        ────────────────────
  @<channel>                                           customer ⇄ Telegram bot
       │ fetch.py (Telethon, user account)                        │
@@ -73,11 +73,14 @@ Append-only, UTF-8, one line per relayed owner answer (`question` = the escalate
 Next to it (#23.7): `faq_embeddings.npy` — `float32[n, EMBED_DIM]`, row *i* = `index.embed([normalise(question of line i)], kind="document")`; lines `n…` of `faq.jsonl` have no row yet ("pending") and are embedded by the next successful `add` / `search`. `faq_embeddings_meta.json` (`config.FAQ_META_PATH`) = `{"model", "dim", "n"}` of that matrix — the same guard as §2.3: an `.npy` without meta or built by another model / dimension is never used or extended until `python -m shop_assistant.faq` rebuilds it.
 
 ### 2.5 `state.json`
-`{"last_post_id": 1234, "last_index_at": "..."}` — drives incremental ingestion (FR-7) and `/stats` (FR-26).
+`{"last_post_id": 1234, "last_index_at": "2026-09-24T03:00:41"}` — drives incremental ingestion (FR-7) and `/stats` (FR-26). `last_post_id` is written by the fetch step; `last_index_at` only by a nightly run whose every step succeeded (a night with nothing new counts), other keys kept.
 
 ### 2.6 `log.jsonl` — one line per customer turn (FR-25)
 `{"ts", "chat_id", "question", "tools": [{"name", "input", "n_results"}], "answer", "escalated": bool, "ms", "usd", "llm_calls": int}`
 (`llm_calls` = Gemini requests that turn, LLM + query embeddings; older lines without it count 1.)
+
+### 2.6a `gemini_ingest.jsonl` — one line per ingestion Gemini request, written by ingest.py (#18)
+`{"ts": "2026-09-24T03:00:12", "kind": "extract" | "embed", "model": "gemini-3.5-flash", "n": 5}` — every HTTP request of the nightly run, retried and failed attempts included; `n` = posts / texts in that request (one embed request of 5 texts is one line, but it spends 5 of the 100 texts/min embed quota). Customer query embeddings are **not** written here (they count in `log.jsonl`). `/stats` adds today's lines to the day's Gemini total (#17).
 
 ### 2.7 `languages.json` — customer language per chat, written by lang.py (FR-13a)
 One JSON object (not JSON lines): `{"<chat_id>": "uz_latn" | "uz_cyrl" | "ru"}`. Only chat id → language code, no message text (NFR-4). Written only when a chat's language changes, atomically (temp file in the same dir + rename). Missing or corrupt → one WARNING, empty store, languages are re-detected.
@@ -95,14 +98,15 @@ One JSON object (not JSON lines): `{"<chat_id>": "uz_latn" | "uz_cyrl" | "ru"}`.
 - `extract(body) -> Product` — one Gemini call (`config.GEMINI_EXTRACT_MODEL`) through `llm.client()` with the `record_products` function **forced** (function-calling mode `ANY`, allowed names = `record_products`) so the output is always a structured call. The schema is `extract._TOOL` (Anthropic-style), converted by `llm.tool_declarations`. Prompt gives the fixed category list, price notation examples (`980.000ming` → 980000), and asks for keywords in uz-Latin, uz-Cyrillic, ru, en.
 - The deterministic guards (price notation, `_sane_price`, `product_name`, `is_announcement`) run on the model output unchanged: they do not depend on the model.
 - Batches of `config.EXTRACT_BATCH` posts per call (NFR-3; fewer requests = less free quota). Timeout `llm.EXTRACT_TIMEOUT_S` per request.
-- Errors: a 429 / 5xx / timeout is retried with exponential backoff; on the final failure the batch raises and `main()` logs an ERROR and stops, so no half batch is written and the posts stay un-extracted for the next run.
+- Errors: a 429 / 5xx / timeout is retried with exponential backoff; on the final failure the batch raises and `main()` logs an ERROR and stops, so no half batch is written and the posts stay un-extracted for the next run. `main()` returns `True` when every pending batch was written (or nothing was pending), `False` when it stopped — that is how `ingest.run()` learns the step failed.
 - CLI: `python -m shop_assistant.extract` processes posts not yet in `products.jsonl`.
 
 ### 3.3 `index.py` — FR-5, FR-6
 - `embed(texts, kind="document", *, retry=False) -> float32[N, EMBED_DIM]` — Gemini `models.embed_content` through `llm.client()` with `config.EMBED_MODEL` and `output_dimensionality = config.EMBED_DIM`, one request per batch of `config.EMBED_BATCH` (≤ 100 texts, the API limit). Task type: `RETRIEVAL_DOCUMENT` for products / FAQ answers (`kind="document"`), `RETRIEVAL_QUERY` for the customer's query (`kind="query"`). Rows are L2-normalised (reduced dimensions are not unit length).
 - Errors: `retry=True` (index CLI only, offline) retries 429 / 5xx / timeouts up to `index.RETRIES` attempts per batch with growing sleeps; an invalid key is never retried. `retry=False` (query path) makes one attempt and lets the error propagate to `search.semantic_search`.
 - **Embed the normalised text**: `embed([normalise(product_text(p)) …])`. Spike #3 measured the old local model cross-script raw at 0.62–0.67 (`krossovka`/`кроссовка`) but 0.87 after transliteration — so D-3 applies to embeddings too, not only to keywords. `scripts/spike_gemini_embed.py` (2026-09-23) repeats it for Gemini: see D-3.
-- Embeds `name + " " + body + " " + " ".join(keywords)` per product; rewrites `embeddings.npy` / `embeddings_ids.json` / `embeddings_meta.json` for all products (cheap at this size; simpler than patching rows). If embedding fails, none of the files is touched.
+- Embeds `name + " " + body + " " + " ".join(keywords)` per product. `reindex()` (the CLI) rewrites `embeddings.npy` / `embeddings_ids.json` / `embeddings_meta.json` for all products. If embedding fails, none of the files is touched.
+- **Incremental update (#18, nightly):** `update_index() -> int` embeds (retry=True) only the products of `products.jsonl` whose ids are not yet in `embeddings_ids.json`, appends their rows after the existing ones (existing rows copied, never re-embedded) and rewrites the three files atomically (temp file + `os.replace`, meta last). Nothing new → 0, no request, no file touched (so the bot does not reload for nothing). No matrix yet → built from all products. A matrix from another model / dimension, or without `embeddings_meta.json`, raises `ModelMismatch` with no request and nothing written: a full re-embed spends the free quota the customers share, so it is only ever `python -m shop_assistant.index` by hand.
 - Same for `faq.jsonl` → `faq_embeddings.npy`.
 - CLI: `python -m shop_assistant.index`.
 
@@ -120,6 +124,7 @@ def search_faq(text, limit=3) -> list[FaqEntry]
 - Filters are ANDed; `keywords` matches if **any** normalised customer keyword is a substring of any normalised product keyword or of `normalise(name)`.
 - Every returned product carries `link`, `date`, and `stale: bool` (`date` older than `config.STALE_DAYS = 60`, FR-16).
 - Loads `products.jsonl` + `.npy` once at import; `reload()` for the admin re-index command.
+- **`reload_if_changed() -> bool` (#18):** `reload()` (and the import) records `_loaded_sig` = per file `(path, (mtime_ns, size))` from `os.stat` (`None` when missing) of `products.jsonl`, `embeddings.npy`, `embeddings_ids.json` and `embeddings_meta.json`, taken before reading. `find_products` (so also `latest_posts`) and `semantic_search` first stat those same files again and compare: same → nothing is read; different → `reload()`, so the first customer search after the nightly run sees tonight's posts without a restart. A reload that fails (e.g. a half-appended line) logs a WARNING and keeps the old catalog; the next call tries again.
 - **Model guard (#23.5):** `_load_matrix()` uses the matrix only when `embeddings_meta.json` exists with `model == config.EMBED_MODEL`, `dim == config.EMBED_DIM` and the matrix is `N × EMBED_DIM`. Otherwise (e.g. an old 1024-d matrix without meta) it logs one ERROR naming the stored model / dimension and semantic search is off until re-index; filters keep working.
 - **Fail fast on the query path:** if the query embedding fails (429, 5xx, timeout, invalid or missing key) `semantic_search` returns `[]` with one WARNING and never raises; the agent carries on as on any empty search (filters or `ask_owner`).
 - CLI: `python -m shop_assistant.search "krosovka 42"` prints both filter and semantic results (FR-24).
@@ -169,7 +174,14 @@ Thin wrappers around §3.5, declared with the plain `tools.tool` decorator (no S
 `CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`GEMINI_MODEL` for the agent, `GEMINI_EXTRACT_MODEL` for extraction — free-tier Flash models; measured limits written next to them; `EMBED_MODEL = "gemini-embedding-001"`, `EMBED_DIM = 768`, `EMBED_BATCH = 100`), `MAX_ITERATIONS = 8`, paths (incl. `EMBEDDINGS_META_PATH`, `FAQ_PATH`, `FAQ_EMBEDDINGS_PATH`, `FAQ_META_PATH`, `LANGUAGES_PATH = DATA_DIR / "languages.json"`). From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `GEMINI_API_KEY` (read lazily with `secret()`). `llm.py` holds the shared Gemini client, `tool_declarations()` and the timeouts.
 
 ### 3.10 `main.py`
-Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service: admin runs `fetch → extract → index` by hand or cron (FR-23), then sends `/reindex` to the bot (calls `search.reload()`).
+Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service (D-7): it is `ingest.py` on its own timer (§3.11); the bot notices the new files by itself (`search.reload_if_changed`). `/reindex` (`search.reload()`) stays for a manual re-index.
+
+### 3.11 `ingest.py` — FR-7, FR-23 (#18)
+- `run() -> bool`: fetch (`fetch.main()`: `min_id = state.last_post_id`, new posts appended) → extract pending (`extract.main()`, whole batches) → `index.update_index()` → `state.last_index_at = now` (ISO, other keys kept). Stops at the first failing step (Telegram error, Gemini 429 / 5xx after retries, `ModelMismatch`, …), logs an ERROR and returns `False`; never raises. Files the failed step would have written stay unchanged; fetched posts are kept and are simply pending for the next night.
+- Every Gemini request of the run (retries and failed attempts included) appends a line to `data/gemini_ingest.jsonl` (§2.6a) through a request hook that `run()` sets on `extract` and `index` and clears afterwards, so customer query embeddings are never logged there.
+- Budget: 5 new posts = 1 extraction request (≤ `EXTRACT_BATCH`) + 1 embedding request (≤ `EMBED_BATCH`).
+- `main() -> int`: 0 on success, 1 on failure (systemd marks the night failed). CLI: `python -m shop_assistant.ingest`.
+- Deploy: `deploy/shop-assistant-ingest.service` (`Type=oneshot`, runs the CLI from `%h/shop_assistant`, never restarts the bot) + `deploy/shop-assistant-ingest.timer` (`OnCalendar=*-*-* 03:00:00` server time = Asia/Tashkent, `Persistent=true` so a night missed while the server was off runs at boot); `deploy.sh` installs both and enables the timer.
 
 ## 4. Key Design Decisions
 
@@ -183,7 +195,7 @@ Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service:
 | D-6 | Conversation history in memory only | persist per customer | NFR-4 privacy; restart loses only the current chat context |
 | D-8 | Customer replies are a one-message carousel with inline buttons (2026-09-21) | forward the channel posts / send an album / plain text list | forwards and albums made customers scroll through five screens; an album cannot carry buttons; Telegram's native "Show as carousel" is app-only until a Bot API layer exposes it |
 | D-9 | `boshqa` records stay in `products.jsonl` but are never returned by search (`search.is_sellable`) | drop them at extraction | ids stay stable for the eval; announcements are visible for debugging |
-| D-7 | Ingestion outside the bot process | live `on_channel_post` handler | keeps the service simple; live updates are a v2 item |
+| D-7 | Ingestion outside the bot process: a oneshot user unit on a nightly systemd **timer** (#18), not a thread or schedule inside the bot | live `on_channel_post` handler; scheduling in the bot | keeps the service simple; a failed night never touches the bot; the bot picks up the new files with `search.reload_if_changed` (no restart); live updates stay a v2 item |
 
 ## 5. Module Layout
 
@@ -192,13 +204,14 @@ shop_assistant/                   # repo root; run everything from here
   docs/shop_assistant_SRS.md, shop_assistant_SDD.md
   shop_assistant/                 # the package: `python -m shop_assistant.fetch`
     config.py  models.py  textnorm.py  fetch.py  extract.py  index.py  search.py
-    llm.py     tools.py   agent.py    bot.py      main.py    lang.py    faq.py
+    llm.py     tools.py   agent.py    bot.py      main.py    lang.py    faq.py    ingest.py
   eval/questions.jsonl        # 20 questions, expected: {"posts":[ids]} or {"escalate":true}
   eval/run_eval.py            # runs agent offline (ask_owner stubbed), prints AC-2..AC-4
   tests/                      # only tests for merged work; a ticket's tests live on its branch until merged
   .github/                    # CI (pytest + tests/ untouched check), CODEOWNERS, PR template
   data/  session/             # gitignored
   requirements.txt  .env.example  deploy.sh  shop-assistant.service
+  deploy/shop-assistant-ingest.service, shop-assistant-ingest.timer   # nightly ingestion (D-7, #18)
 ```
 
 ## 6. Traceability
@@ -212,7 +225,7 @@ shop_assistant/                   # repo root; run everything from here
 | FR-13–18, 20 | agent.py (system prompt + history) |
 | FR-13, 13a | lang.py (detection, per-chat store, fixed texts), bot.py, agent.py (answer-in line) |
 | FR-19, 21, 22 | bot.py `escalate` + owner-reply handler, tools.ask_owner; faq.py + tools.search_faq_tool (FR-22) |
-| FR-23, 24 | CLIs of fetch/extract/index/search |
+| FR-23, 24 | CLIs of fetch/extract/index/search; nightly `ingest.py` on a systemd timer |
 | FR-25, 26 | bot.py logging, `/stats` |
 | NFR-1, 2 | Gemini free-tier Flash model, max_iterations=8, compact tool output |
 | NFR-3 | extract batching (`EXTRACT_BATCH`/call), embed batching (128) |
@@ -250,3 +263,4 @@ shop_assistant/                   # repo root; run everything from here
 | 1.1 | 2026-09-23 | SRS v0.5 FR-13a (#24): new `lang.py` (§3.8a: language detection, per-chat store, `TEXTS`), `data/languages.json` (§2.7), `config.LANGUAGES_PATH`; §3.7 explicit "Answer in …" line + `run_agent(lang=)`; §3.8 `/start` greeting without LLM, localized carousel/escalation/error texts |
 | 1.2 | 2026-09-23 | R2 FAQ store (#23.7, FR-22): new `faq.py` (§3.5a) with `faq.jsonl` + `faq_embeddings.npy` + `faq_embeddings_meta.json` (§2.4, `config.FAQ_META_PATH`), model guard as for products, measured `faq.THRESHOLD`; §3.6 `search_faq_tool` uses `faq.search` and labels answers with `lang.TEXTS[l]["owner_said"]`; §3.7 rule "search_faq_tool before ask_owner"; §3.8 the owner's relayed answer is saved with `faq.add` (failure never blocks the relay) |
 | 0.4 | 2026-09-17 | SRS C-2 v0.4: Claude + Voyage replaced by Ollama on the GPU server (`gemma4:31b`, `bge-m3`); §1.1, §3.2, §3.3, §3.7, §3.9, §7 updated; deploy target = the GPU server |
+| 1.3 | 2026-09-23 | #18: nightly ingestion — new `ingest.py` (§3.11: fetch → extract pending → `index.update_index()` → `state.last_index_at`, `False`/exit 1 on a failed step) on a oneshot unit + `deploy/shop-assistant-ingest.timer` (03:00, `Persistent=true`); §3.3 incremental `update_index()` + `ModelMismatch`; §3.5 `search.reload_if_changed()` (os.stat signature, no bot restart); §2.6a `gemini_ingest.jsonl`; §3.2 `extract.main()` returns success; D-7 timer, not the bot |
