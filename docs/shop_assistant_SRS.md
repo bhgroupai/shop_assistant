@@ -87,6 +87,7 @@ Customer ◀──Telegram bot──▶ Agent ──tools───────�
 | ID | Requirement |
 |---|---|
 | FR-13 | The bot shall reply in the language of the customer's message (uz Latin, uz Cyrillic, or ru). |
+| FR-13a | The bot shall remember each customer's language (uz Latin, uz Cyrillic, ru) across messages and restarts and use it for every message it sends that customer, including fixed texts and buttons. The stored record holds only the chat id and a language code, never message text, so NFR-4 still holds. |
 | FR-14 | Every product mentioned in a reply shall be accompanied by its post link. |
 | FR-15 | The bot shall never state a price, size, or availability that is not present in a retrieved record. |
 | FR-16 | Posts older than 60 days (configurable) shall be presented with a "may be sold out, confirm with owner" note. |
@@ -146,5 +147,5 @@ Customer ◀──Telegram bot──▶ Agent ──tools───────�
 | 0.1 | 2026-09-16 | Initial draft |
 | 0.3 | 2026-09-16 | Q-2…Q-5 closed: developer plays owner (A-4), Voyage embeddings (C-2), private chats only (C-5), 60-day threshold (FR-16) |
 | 0.4 | 2026-09-17 | C-2: local models (Ollama on own GPU server) instead of Claude + Voyage; NFR-2/NFR-3 cost limits replaced by token/time limits |
-| 0.5 | 2026-09-23 | C-2: no local models — agent and extraction use a hosted Gemini free-tier model (embeddings follow in #23.5); customer questions and captions now go to Google (privacy trade-off accepted by Sanjarbek for faster replies without a local GPU); NFR-2 "no cost within the free quota"; NFR-3 to be re-measured |
+| 0.5 | 2026-09-23 | C-2: no local models — agent and extraction use a hosted Gemini free-tier model (embeddings follow in #23.5); customer questions and captions now go to Google (privacy trade-off accepted by Sanjarbek for faster replies without a local GPU); NFR-2 "no cost within the free quota"; NFR-3 to be re-measured; FR-13a (#24): each customer's language is remembered across restarts (chat id → language code only, NFR-4) |
 | 0.2 | 2026-09-16 | Channel chosen (the shop channel); assumptions A-1/A-2/A-5/A-6 and FR-3a/3b added from sample posts; Q-1 closed |
