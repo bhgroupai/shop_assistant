@@ -159,5 +159,5 @@ def test_empty_key_raises_clear_error(recording_genai, monkeypatch):
 
 
 def test_timeouts():
-    assert 10 <= llm.AGENT_TIMEOUT_S <= 20
+    assert 10 <= llm.AGENT_TIMEOUT_S <= 15       # ticket #26: 15 s + one retry (8 s failed live)
     assert llm.EXTRACT_TIMEOUT_S > llm.AGENT_TIMEOUT_S

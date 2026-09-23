@@ -1,8 +1,9 @@
-"""Manual Gemini function-calling loop (google-genai) + per-customer history. SDD §3.7, FR-13…18/20. Tickets #10, #23."""
+"""Manual Gemini function-calling loop (google-genai) + per-customer history. SDD §3.7, FR-13…18/20. Tickets #10, #23, #26."""
 import contextvars
 import json
 import logging
 import re
+import time
 
 import httpx
 from google.genai import errors, types
@@ -65,6 +66,17 @@ last_run: dict = {"tools": [], "escalated": False, "usd": 0.0, "llm_calls": 0}
 # 429 quota / other API errors, 5xx, timeouts and transport errors, missing key (RuntimeError from llm.client()).
 _API_ERRORS = (errors.APIError, httpx.HTTPError, RuntimeError)
 
+# Ticket #26: transient failures worth one retry (same model, same contents). 429 / 400 are not.
+_RETRY_CODES = frozenset({500, 502, 503, 504})
+RETRY_PAUSE_S = 0.7
+
+
+def _is_transient(e: Exception) -> bool:
+    """True for a 500/502/503/504 server error or a client-side timeout (httpx / SDK)."""
+    if isinstance(e, httpx.TimeoutException):
+        return True
+    return isinstance(e, errors.APIError) and getattr(e, "code", None) in _RETRY_CODES
+
 
 class History:
     """Per-customer message history, last config.HISTORY_TURNS turns, in memory only (FR-17, NFR-4)."""
@@ -107,7 +119,9 @@ def _request_config(lang: str = DEFAULT_LANG) -> types.GenerateContentConfig:
         system_instruction=system_prompt(lang),
         tools=[types.Tool(function_declarations=llm.tool_declarations(tools.TOOLS))],
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        http_options=types.HttpOptions(timeout=llm.AGENT_TIMEOUT_S * 1000),
+        # Client gives up after AGENT_TIMEOUT_S; the server deadline header must be >= 10 s (see llm.py).
+        http_options=types.HttpOptions(timeout=llm.AGENT_TIMEOUT_S * 1000,
+                                       headers={"X-Server-Timeout": str(llm.SERVER_DEADLINE_S)}),
     )
 
 
@@ -130,6 +144,23 @@ def _run_tool(name: str, args: dict) -> str:
     return out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
 
 
+def _generate(chat_id: int, contents: list, cfg, run: dict):
+    """One model step: a generate_content request, retried ONCE on a transient failure (5xx / timeout)
+    after RETRY_PAUSE_S, with the same model and contents (#26). Every attempt counts in run["llm_calls"].
+    A second failure, or any non-transient error (429, 400, ...), propagates to run_agent's handler."""
+    for attempt in (1, 2):
+        run["llm_calls"] += 1
+        try:
+            return llm.client().models.generate_content(model=config.GEMINI_MODEL, contents=contents, config=cfg)
+        except _API_ERRORS as e:
+            if attempt == 2 or not _is_transient(e):
+                raise
+            code = getattr(e, "code", None)
+            log.warning("chat %s: Gemini request failed (%s%s), retrying once in %.1f s", chat_id,
+                        type(e).__name__, f" {code}" if code else "", RETRY_PAUSE_S)
+            time.sleep(RETRY_PAUSE_S)
+
+
 def run_agent(chat_id: int, text: str, history: History | None = None, lang: str = "uz_latn") -> str:
     """Blocking. Manual Gemini function-calling loop over TOOLS, max_iterations=8. Returns final reply text.
     Ticket #24: `lang` (uz_latn | uz_cyrl | ru, see lang.py) — the system prompt gets one explicit
@@ -146,8 +177,7 @@ def run_agent(chat_id: int, text: str, history: History | None = None, lang: str
     try:
         cfg = _request_config(lang)
         while run["llm_calls"] < config.MAX_ITERATIONS:
-            run["llm_calls"] += 1
-            resp = llm.client().models.generate_content(model=config.GEMINI_MODEL, contents=contents, config=cfg)
+            resp = _generate(chat_id, contents, cfg, run)
             content = resp.candidates[0].content if resp.candidates else None
             calls = [p.function_call for p in (content.parts if content is not None else None) or []
                      if p.function_call]
