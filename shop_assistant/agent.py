@@ -7,19 +7,38 @@ import httpx
 from google.genai import errors, types
 
 from shop_assistant import config, llm, tools
+from shop_assistant.lang import DEFAULT as DEFAULT_LANG, TEXTS
 from shop_assistant.tools import NO_FAQ, NO_RESULTS
 
 log = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are the assistant of a clothing shop whose catalog is its Telegram channel. Rules:
-1. Reply in the customer's language AND script: Uzbek Latin, Uzbek Cyrillic or Russian, exactly as they wrote.
+SYSTEM_PROMPT_TEMPLATE = """You are the assistant of a clothing shop whose catalog is its Telegram channel. Rules:
+1. {answer_line}.
 2. If the question names a product type, size, price or color, call find_products_tool first; if it returns "no results", call semantic_search_tool. If the question only describes an occasion, season or feeling without naming a product type (e.g. "kuzda kiyishga mos narsa", "to'yga chiroyli narsa", "что-нибудь для холодной погоды"), call semantic_search_tool directly. For "what's new" questions (yangi, янги, новое, новинки) call latest_posts_tool. For delivery, payment, address, hours or other shop questions call search_faq_tool.
 3. Never state a price, size, color or availability that is not in a tool result. Never guess stock.
 4. Call ask_owner when: the customer asks whether an item is STILL available / in stock ("hali bormi", "ҳали борми", "ещё есть", "в наличии", "qolganmi") — availability is never in the catalog, so escalate even if search finds the product (you may still show it). A plain "bormi?" / "борми?" / "есть?" is an ordinary search question: answer from search results, do not escalate; both searches found nothing relevant; or the question is about orders, delivery, payment or anything outside the catalog. After ask_owner, tell the customer the owner will reply soon.
-5. Show at most 5 products per reply; if there are more, ask the customer to narrow down. Keep the tool's numbering (1., 2., ...) and always include each product's link. Items whose price is "narxi: so'rab beraman" have no known price: show that phrase, never send the customer elsewhere to ask; end your reply with the one line "Narxini bilmoqchi bo'lsangiz raqamini yozing" (in the customer's language) only when the tool result ends with it, i.e. some shown item has no price; otherwise omit it. For products marked [eskirgan] add a note in the customer's language that it may be sold out and should be confirmed with the owner.
+5. Show at most 5 products per reply; if there are more, ask the customer to narrow down. Keep the tool's numbering (1., 2., ...) and always include each product's link. Items whose price is "{tool_ask_price}" in the tool result have no known price: write "{ask_price}" as their price, never send the customer elsewhere to ask; end your reply with the one line "{offer_price}" only when the tool result ends with "{tool_offer_price}", i.e. some shown item has no price; otherwise omit it. For products marked [eskirgan] keep the [eskirgan] tag on the item's line and add the note "{stale_note}".
 6. If the message is "<media>" (a photo/voice without text), do not call tools: ask the customer to write the product name in text.
 7. A message that is just a number, or "narxi N" / "N-chisi" / "N-си" / "цена N", refers to item N of your previous numbered reply. For a price question call ask_owner(question, post_ids=[that item's id from its t.me link]) and confirm the owner will reply with the price. For other follow-ups about item N (e.g. "2-chisi 43 bormi?") call find_products_tool with that item's name as keywords plus the asked filter (size/color/price).
 Be short and friendly; no markdown tables."""
+
+ANSWER_LINES = {
+    "uz_latn": "Answer in Uzbek, Latin script",
+    "uz_cyrl": "Answer in Uzbek, Cyrillic script",
+    "ru": "Answer in Russian",
+}
+
+
+def system_prompt(lang: str = DEFAULT_LANG) -> str:
+    """SYSTEM_PROMPT_TEMPLATE with one explicit answer-in line and the fixed phrases in `lang` (#24)."""
+    lang = lang if lang in TEXTS else DEFAULT_LANG
+    t, uz = TEXTS[lang], TEXTS["uz_latn"]
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        answer_line=ANSWER_LINES[lang], ask_price=t["ask_price"], offer_price=t["offer_price"],
+        stale_note=t["stale_note"], tool_ask_price=uz["ask_price"], tool_offer_price=uz["offer_price"])
+
+
+SYSTEM_PROMPT = system_prompt(DEFAULT_LANG)
 
 APOLOGY = "Kechirasiz, texnik xatolik. Birozdan keyin qayta urinib ko'ring."
 
@@ -67,9 +86,9 @@ def _to_contents(messages: list[dict]) -> list[types.Content]:
     return out
 
 
-def _request_config() -> types.GenerateContentConfig:
+def _request_config(lang: str = DEFAULT_LANG) -> types.GenerateContentConfig:
     return types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=system_prompt(lang),
         tools=[types.Tool(function_declarations=llm.tool_declarations(tools.TOOLS))],
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         http_options=types.HttpOptions(timeout=llm.AGENT_TIMEOUT_S * 1000),
@@ -98,7 +117,7 @@ def _run_tool(name: str, args: dict) -> str:
 def run_agent(chat_id: int, text: str, history: History | None = None, lang: str = "uz_latn") -> str:
     """Blocking. Manual Gemini function-calling loop over TOOLS, max_iterations=8. Returns final reply text.
     Ticket #24: `lang` (uz_latn | uz_cyrl | ru, see lang.py) — the system prompt gets one explicit
-    "Answer in ..." line and the fixed phrases the model copies in that language. Not wired yet."""
+    "Answer in ..." line and the fixed phrases the model copies in that language."""
     global last_run
     h = history or _history
     current_chat_id.set(chat_id)
@@ -106,8 +125,10 @@ def run_agent(chat_id: int, text: str, history: History | None = None, lang: str
     h.append(chat_id, "user", text)
     contents = _to_contents(h.get(chat_id))
     reply = ""
+    # Uzbek Latin keeps the old APOLOGY; other languages get their error text (#24).
+    apology = APOLOGY if lang == DEFAULT_LANG or lang not in TEXTS else TEXTS[lang]["error_reply"]
     try:
-        cfg = _request_config()
+        cfg = _request_config(lang)
         while run["llm_calls"] < config.MAX_ITERATIONS:
             run["llm_calls"] += 1
             resp = llm.client().models.generate_content(model=config.GEMINI_MODEL, contents=contents, config=cfg)
@@ -143,10 +164,10 @@ def run_agent(chat_id: int, text: str, history: History | None = None, lang: str
         msgs = h.get(chat_id)
         if msgs and msgs[-1] == {"role": "user", "content": text}:
             msgs.pop()          # keep history consistent; the apology is not stored either
-        return APOLOGY
+        return apology
     last_run = run
-    h.append(chat_id, "assistant", reply or APOLOGY)
-    return reply or APOLOGY
+    h.append(chat_id, "assistant", reply or apology)
+    return reply or apology
 
 
 if __name__ == "__main__":

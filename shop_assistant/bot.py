@@ -8,21 +8,22 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
-from shop_assistant import config
+from shop_assistant import config, lang
 
 log = logging.getLogger(__name__)
 
 ESC_PREFIX = "#esc"
 _ESC_RE = re.compile(r"^#esc (\d+)")
 
-ERROR_REPLY = "Kechirasiz, xatolik yuz berdi. Birozdan keyin qayta urinib ko'ring."
-ESCALATED_REPLY = "Egasi tez orada javob beradi 🙏"
+# Customer-facing texts live in lang.TEXTS (#24); these are the Uzbek Latin values, kept for reference.
+ERROR_REPLY = lang.TEXTS["uz_latn"]["error_reply"]
+ESCALATED_REPLY = lang.TEXTS["uz_latn"]["escalated_reply"]
 OWNER_HINT_NOT_REPLY = "Mijozga javob berish uchun #esc xabariga reply qiling."
 OWNER_HINT_NOT_ESC = "Bu #esc xabari emas."
 OWNER_SENT = "✓ yuborildi"
 MAX_FORWARD = 5  # posts illustrated per reply (ticket #19)
 CAPTION_LIMIT = 1024  # Telegram media caption limit
-STALE_NOTE = "⚠️ Eskirgan bo'lishi mumkin — egadan tasdiqlang"
+STALE_NOTE = lang.TEXTS["uz_latn"]["stale_note"]
 
 # Set inside run() after the client starts; escalate_sync() (called from the agent's
 # worker thread) uses it to schedule coroutines on the bot's loop.
@@ -214,17 +215,30 @@ async def route(event, owner: int) -> None:
 
 # ---------------------------------------------------------------- carousel reply (ticket #19)
 
-def _fmt_price(p: str) -> str:
+_PRICE_WORD = re.compile(r"^(?:narxi?|нархи?|цена)\s*:\s*", re.IGNORECASE)
+
+
+def _is_ask_price(text: str) -> bool:
+    """True when `text` carries the "price: I'll ask" phrase in any language (lang.TEXTS)."""
+    low = (text or "").lower()
+    return any(t["ask_price"].lower() in low for t in lang.TEXTS.values())
+
+
+def _fmt_price(p: str, code: str = lang.DEFAULT) -> str:
     digits = p.replace(".", "").replace(" ", "")
     if digits.isdigit():
-        return f"{int(digits):,}".replace(",", " ") + " so'm"
-    return re.sub(r"^narxi?:\s*", "", p, flags=re.IGNORECASE)   # "narxi: so'rab beraman" → "so'rab beraman"
+        return f"{int(digits):,}".replace(",", " ") + " " + lang.CURRENCY[code]
+    if _is_ask_price(p):                       # "narxi: so'rab beraman" → "so'rab beraman" in the chat's language
+        p = lang.TEXTS[code]["ask_price"]
+    return _PRICE_WORD.sub("", p)
 
 
-def carousel_caption(reply: str, current: int) -> str:
+def carousel_caption(reply: str, current: int, lang: str = lang.DEFAULT) -> str:
     """Card for item `current+1` of the numbered `reply` (0-based): title line `N. name`, then
-    `Narxi:`, `O'lcham:` (omitted when '-'), `Sana:` and a stale warning when the line carries one.
-    Falls back to the whole reply when that line does not exist. Cut to CAPTION_LIMIT."""
+    price, sizes (omitted when '-'), date and a stale warning when the line carries one; labels and
+    the note from lang.TEXTS[lang] (#24). Falls back to the whole reply when that line does not exist.
+    Cut to CAPTION_LIMIT."""
+    t = _texts(lang)
     n = current + 1
     m = re.search(rf"^{n}\. (.+)$", reply or "", re.MULTILINE)
     if not m:
@@ -235,13 +249,13 @@ def carousel_caption(reply: str, current: int) -> str:
     parts = [p.strip() for p in line.split(" · ")]
     parts = [p for p in parts if p and not p.startswith("[") and "t.me/" not in p]
     name, price, sizes, date = (parts + ["", "", "", ""])[:4]
-    out = [f"{n}. {name}", f"Narxi: {_fmt_price(price)}"]
+    out = [f"{n}. {name}", f"{t['price_label']} {_fmt_price(price, t['_code'])}"]
     if sizes and sizes != "-":
-        out.append("O'lcham: " + ", ".join(s.strip() for s in sizes.split(",")))
+        out.append(f"{t['sizes_label']} " + ", ".join(s.strip() for s in sizes.split(",")))
     if date:
-        out.append(f"Sana: {date}")
+        out.append(f"{t['date_label']} {date}")
     if stale:
-        out.append(STALE_NOTE)
+        out.append(t["stale_note"])
     return "\n".join(out)[:CAPTION_LIMIT]
 
 
@@ -264,6 +278,21 @@ def parse_carousel_data(data: bytes) -> tuple[str, int, list[int]] | None:
 
 
 
+def _texts(code: str) -> dict:
+    """lang.TEXTS for `code` (unknown → Uzbek Latin), plus the resolved code under '_code'."""
+    code = code if code in lang.TEXTS else lang.DEFAULT
+    return {**lang.TEXTS[code], "_code": code}
+
+
+def _chat_lang(chat_id: int) -> str:
+    """The stored language of `chat_id` (lang.get_store()); Uzbek Latin when nothing is stored."""
+    try:
+        return lang.get_store().get(chat_id) or lang.DEFAULT
+    except Exception:
+        log.exception("language store lookup failed for chat %s", chat_id)
+        return lang.DEFAULT
+
+
 def _inline(text: str, data: bytes):
     from telethon import Button
     return Button.inline(text, data)
@@ -274,9 +303,10 @@ def _url(text: str, url: str):
     return Button.url(text, url)
 
 
-def carousel_buttons(idx: int, ids: list[int], ask_price: bool) -> list[list]:
+def carousel_buttons(idx: int, ids: list[int], ask_price: bool, lang: str = lang.DEFAULT) -> list[list]:
     """Inline keyboard rows: row 0 = ◀ · `<idx+1>/<n>` · ▶ (omitted when n == 1);
-    last row = `Narxini so'rash` (only when ask_price) + `Kanalda ko'rish` url button."""
+    last row = ask-price (only when ask_price) + view-in-channel url button, labels in `lang` (#24)."""
+    t = _texts(lang)
     n = len(ids)
     rows: list[list] = []
     if n > 1:
@@ -287,8 +317,8 @@ def carousel_buttons(idx: int, ids: list[int], ask_price: bool) -> list[list]:
         ])
     last: list = []
     if ask_price:
-        last.append(_inline("Narxini so'rash", carousel_data("p", idx, ids)))
-    last.append(_url("Kanalda ko'rish", f"https://t.me/{config.CHANNEL}/{ids[idx]}"))
+        last.append(_inline(t["ask_price_button"], carousel_data("p", idx, ids)))
+    last.append(_url(t["view_in_channel_button"], f"https://t.me/{config.CHANNEL}/{ids[idx]}"))
     rows.append(last)
     return rows
 
@@ -354,13 +384,12 @@ async def _media_for(client, ids: list[int]) -> dict[int, object]:
 
 
 def _ask_price_on(reply: str, number_idx: int) -> bool:
-    """True when the `<number_idx+1>. …` line of `reply` has no price (ASK_PRICE marker)."""
-    from shop_assistant.tools import ASK_PRICE
+    """True when the `<number_idx+1>. …` line of `reply` has no price (the ask-price phrase in any language)."""
     prefix = f"{number_idx + 1}. "
-    return any(line.startswith(prefix) and ASK_PRICE in line for line in (reply or "").split("\n"))
+    return any(line.startswith(prefix) and _is_ask_price(line) for line in (reply or "").split("\n"))
 
 
-async def send_reply(event, reply: str) -> None:
+async def send_reply(event, reply: str, lang: str = lang.DEFAULT) -> None:
     """One message: item 1's photo/video (channel logo when the post has none), its card as
     caption and inline ◀/▶ buttons that edit it in place (#19).
     Falls back to plain text (no link preview) when there is no media or the send fails."""
@@ -372,8 +401,8 @@ async def send_reply(event, reply: str) -> None:
                 idx = 0
                 msg = await event.client.send_file(
                     event.chat_id, media[ids[0]],
-                    caption=carousel_caption(reply, idx),
-                    buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx)),
+                    caption=carousel_caption(reply, idx, lang),
+                    buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx), lang),
                     reply_to=event.message.id)
                 _remember_placeholder(media[ids[0]], msg)
                 if msg is not None and getattr(msg, "id", None) is not None:
@@ -395,7 +424,9 @@ def _rebuild_reply(ids: list[int]) -> str:
 
 async def handle_callback(event) -> None:
     """Inline button press on a carousel message: 'c' → edit media/caption/buttons in place,
-    'p' → escalate the current post's price to the owner. Owner presses are ignored."""
+    'p' → escalate the current post's price to the owner. Owner presses are ignored.
+    Texts in the chat's stored language (#24), so buttons stay localized after a restart."""
+    code = lang.DEFAULT
     try:
         if event.sender_id == owner_id():
             return
@@ -404,41 +435,61 @@ async def handle_callback(event) -> None:
             await event.answer()
             return
         kind, idx, ids = parsed
+        code = _chat_lang(event.sender_id)
         if not 0 <= idx < len(ids):
             await event.answer()
             return
         if kind == "p":
             await escalate(event.sender_id, f"Narxi? https://t.me/{config.CHANNEL}/{ids[idx]}", [ids[idx]])
             log.info("price escalation from chat %s for post %s", event.sender_id, ids[idx])
-            await event.answer("Egaga yuborildi, javobini shu yerga yozaman", alert=False)
+            await event.answer(lang.TEXTS[code]["callback_toast"], alert=False)
             return
         media = await _media_for(event.client, ids)
         if ids[idx] not in media:
             await event.answer()
             return
         reply = _captions.get(event.message_id) or _rebuild_reply(ids)
-        msg = await event.edit(carousel_caption(reply, idx), file=media[ids[idx]],
-                               buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx)),
+        msg = await event.edit(carousel_caption(reply, idx, code), file=media[ids[idx]],
+                               buttons=carousel_buttons(idx, ids, _ask_price_on(reply, idx), code),
                                link_preview=False)
         _remember_placeholder(media[ids[idx]], msg)
         await event.answer()
     except Exception:
         log.exception("handle_callback failed for chat %s", getattr(event, "sender_id", "?"))
         try:
-            await event.answer("Xatolik")
+            await event.answer(lang.TEXTS[code]["callback_error"])
         except Exception:
             log.exception("could not answer callback")
 
 
+async def _lang_code(event) -> str | None:
+    """Telegram sender.lang_code of the event; None when there is no sender (channels, anonymous)."""
+    try:
+        sender = getattr(event, "sender", None)
+        if sender is None and hasattr(event, "get_sender"):
+            sender = await event.get_sender()
+        return getattr(sender, "lang_code", None)
+    except Exception:
+        log.warning("no sender for chat %s", getattr(event, "chat_id", "?"))
+        return None
+
+
 async def handle_customer(event) -> None:
-    """to_thread(run_agent) → reply; log the turn."""
+    """Resolve the chat's language (#24); '/start' → localized greeting (no LLM);
+    otherwise to_thread(run_agent, lang=…) → reply; log the turn."""
+    code = lang.DEFAULT
     try:
         from shop_assistant import agent  # lazy: agent imports the LLM stack
         text = event.raw_text or "<media>"
+        code = _chat_lang(event.chat_id)       # used by the error reply if resolving itself fails
+        code = lang.resolve(event.chat_id, event.raw_text or "", await _lang_code(event))
+        if _command(text) == "/start":
+            await event.reply(lang.TEXTS[code]["greeting"])
+            return
         t0 = time.monotonic()
-        reply = await asyncio.to_thread(agent.run_agent, event.chat_id, text)
+        reply = await asyncio.to_thread(agent.run_agent, event.chat_id, text, lang=code)
         ms = int((time.monotonic() - t0) * 1000)
-        await send_reply(event, reply)
+        await send_reply(event, reply, code)
         last = getattr(agent, "last_run", {}) or {}
         log_turn(event.chat_id, text, last.get("tools", []), reply,
                  last.get("escalated", False), ms, last.get("usd", 0.0),
@@ -446,17 +497,18 @@ async def handle_customer(event) -> None:
     except Exception:
         log.exception("handle_customer failed for chat %s", getattr(event, "chat_id", "?"))
         try:
-            await event.reply(ERROR_REPLY)
+            await event.reply(lang.TEXTS[code]["error_reply"])
         except Exception:
             log.exception("could not send error reply")
 
 
 async def escalate(customer_id: int, question: str, post_ids: list[int]) -> None:
-    """Message the owner; tell the customer 'Egasi tez orada javob beradi' (FR-19)."""
+    """Message the owner (Uzbek); tell the customer 'the owner will answer soon' in their stored
+    language (FR-19, #24)."""
     client = _client()
     links = [f"https://t.me/{config.CHANNEL}/{i}" for i in post_ids]
     await client.send_message(owner_id(), format_escalation(customer_id, question, links))
-    await client.send_message(customer_id, ESCALATED_REPLY)
+    await client.send_message(customer_id, lang.TEXTS[_chat_lang(customer_id)]["escalated_reply"])
 
 
 def escalate_sync(question: str, post_ids: list[int]) -> None:

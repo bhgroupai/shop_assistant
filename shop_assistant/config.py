@@ -39,6 +39,7 @@ FAQ_PATH = DATA_DIR / "faq.jsonl"
 FAQ_EMBEDDINGS_PATH = DATA_DIR / "faq_embeddings.npy"
 STATE_PATH = DATA_DIR / "state.json"
 LOG_PATH = DATA_DIR / "log.jsonl"
+LANGUAGES_PATH = DATA_DIR / "languages.json"   # chat id → language code (#24, FR-13a)
 
 # Secrets — read lazily so importing config never fails without .env (NFR-6).
 ENV_KEYS = ("TG_CHANNEL", "TG_API_ID", "TG_API_HASH", "TG_BOT_TOKEN", "TG_OWNER_ID", "GEMINI_API_KEY")
