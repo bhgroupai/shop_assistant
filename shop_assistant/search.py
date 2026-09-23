@@ -221,6 +221,16 @@ def search_faq(text: str, limit: int = 3) -> list[FaqEntry]:
     return []
 
 
+_loaded_sig = None   # (mtime_ns, size) signature of the files the current catalog/matrix was loaded from (#18)
+
+
+def reload_if_changed() -> bool:
+    """Ticket #18: cheap check (os.stat only) whether products.jsonl / the embeddings files on disk differ
+    from what was last loaded; if so reload() and return True, else False. Called by find_products /
+    latest_posts / semantic_search so the bot picks up the nightly index without a restart."""
+    raise NotImplementedError("ticket #18")
+
+
 def reload() -> None:
     """Re-read products.jsonl + .npy from disk (admin /reindex)."""
     global PRODUCTS, _by_id, _matrix, _ids

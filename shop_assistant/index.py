@@ -161,6 +161,20 @@ def reindex() -> int:
     return len(products)
 
 
+class ModelMismatch(RuntimeError):
+    """The matrix on disk was built by another embedding model / dimension (or has no embeddings_meta.json):
+    only a full `python -m shop_assistant.index` may fix it, never the nightly run (ticket #18)."""
+
+
+def update_index() -> int:
+    """Incremental index for the nightly run (ticket #18; contract: tests/test_ingest.py docstring).
+    Embeds (retry=True) only products whose ids are not yet in the matrix, appends their rows, rewrites
+    matrix + ids + meta atomically (meta last). No matrix yet → builds it from all products. Matrix from
+    another model / dim or without meta → ModelMismatch, nothing embedded, nothing written.
+    Nothing new → 0, no request, no file touched. Returns the number of rows added."""
+    raise NotImplementedError("ticket #18")
+
+
 def reindex_faq() -> int:
     """Same for faq.jsonl → faq_embeddings.npy (R2, ticket #16)."""
     raise NotImplementedError("ticket #16")
