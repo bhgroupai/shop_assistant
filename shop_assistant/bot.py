@@ -522,7 +522,7 @@ def escalate_sync(question: str, post_ids: list[int]) -> None:
 
 
 async def handle_owner_reply(event) -> None:
-    """Owner reply-to '#esc' → forward text to the customer (FR-21); hint if not a reply."""
+    """Owner reply-to '#esc' → forward text to the customer (FR-21), then save it to the FAQ (FR-22); hint if not a reply."""
     if not event.is_reply:
         await event.reply(OWNER_HINT_NOT_REPLY)
         return
@@ -533,6 +533,22 @@ async def handle_owner_reply(event) -> None:
         return
     await _client().send_message(cid, event.raw_text)
     await event.reply(OWNER_SENT)
+    await _save_faq(quoted.raw_text, event.raw_text)
+
+
+def esc_question(quoted: str) -> str:
+    """The customer's question from a quoted '#esc' message: without the header line and the t.me link lines."""
+    lines = (quoted or "").split("\n")[1:]
+    return "\n".join(ln for ln in lines if "t.me/" not in ln).strip()
+
+
+async def _save_faq(quoted: str, answer: str) -> None:
+    """FR-22 (#23.7): the relayed owner answer goes to the FAQ store. Runs after the relay; never raises."""
+    from shop_assistant import faq   # looked up at call time (tests replace faq.add)
+    try:
+        await asyncio.to_thread(faq.add, esc_question(quoted), answer, post_ids_in(quoted))
+    except Exception:
+        log.exception("owner answer relayed but not saved to the FAQ")
 
 
 # ---------------------------------------------------------------- entry point (#15)

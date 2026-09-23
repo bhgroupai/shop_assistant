@@ -233,6 +233,7 @@ shop_assistant/                   # repo root; run everything from here
 - Category list too narrow → `boshqa` bucket; review after first extract run.
 - Customer sends a photo/voice only → agent gets `<media>`; reply asking for text (v1), photo search is out of scope.
 - Owner forgets to *reply* to the `#esc` message → bot answers the owner with a hint.
+- FAQ search by cosine cannot tell "dastavka Toshkentga qancha?" from the stored Samarqand question (0.83, above `faq.THRESHOLD = 0.75`) → the tool line carries the stored question and the prompt uses an answer only when it fits; watch escalations vs FAQ answers in `log.jsonl`.
 
 ## 8. Change Log
 | Version | Date | Change |

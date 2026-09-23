@@ -23,7 +23,8 @@ Contract (tests/test_lang.py, tests/test_bot_lang.py):
   get_store().
 - TEXTS: {lang: {key: str}} with identical keys for every lang in LANGS, all non-empty:
   greeting, ask_price_button, view_in_channel_button, stale_note, escalated_reply, callback_toast,
-  callback_error, error_reply, ask_price, offer_price, price_label, sizes_label, date_label.
+  callback_error, error_reply, ask_price, offer_price, price_label, sizes_label, date_label,
+  owner_said (#23.7: label of an owner's FAQ answer in search_faq_tool output and the system prompt).
   Owner-facing texts (bot.OWNER_HINT_*, the #esc header) are not here and stay Uzbek.
 """
 import json
@@ -60,6 +61,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "price_label": "Narxi:",
         "sizes_label": "O'lcham:",
         "date_label": "Sana:",
+        "owner_said": "egasi aytgan",
     },
     "uz_cyrl": {
         "greeting": "Ассалому алайкум! 👋 Мен дўкон ёрдамчисиман. Қандай маҳсулот қидиряпсиз? "
@@ -76,6 +78,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "price_label": "Нархи:",
         "sizes_label": "Ўлчам:",
         "date_label": "Сана:",
+        "owner_said": "эгаси айтган",
     },
     "ru": {
         "greeting": "Здравствуйте! 👋 Я помощник магазина. Что вы ищете? "
@@ -92,6 +95,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "price_label": "Цена:",
         "sizes_label": "Размер:",
         "date_label": "Дата:",
+        "owner_said": "ответ владельца",
     },
 }
 
