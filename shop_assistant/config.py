@@ -19,7 +19,10 @@ MIN_PRICE = 10_000         # so'm; smaller "prices" from the model are junk → 
 #   too few for customers (1.8 requests per message, max 4); 3.5-flash-lite took 16 requests in 15 s with
 #   no 429, median 0.77 s, and called find_products on 10/10 spike runs. Extraction is offline and ~7
 #   requests a night, so it uses the stronger model (fewer mis-categorised items than flash-lite).
-# TODO: requests/day per model — read from AI Studio -> Rate limits (not exposed by the API).
+# Daily limits: gemini-3.5-flash = 20 requests/day (429 quotaId GenerateRequestsPerDayPerProjectPerModel-FreeTier,
+#   quotaValue 20, seen 2026-09-23 on the server's first ingest runs). Enough for ~1 extraction request a night, but
+#   every retry counts, and the quota resets at midnight Pacific (12:00 Tashkent). flash-lite took ~250 requests
+#   the same day with no daily 429 — its exact daily limit: TODO, read from AI Studio -> Rate limits.
 GEMINI_MODEL = "gemini-3.5-flash-lite"   # customer agent
 GEMINI_EXTRACT_MODEL = "gemini-3.5-flash"   # post extraction
 MAX_ITERATIONS = 8               # model requests per customer turn
