@@ -176,6 +176,9 @@ def _dry_setup():
 
 # --- runner ------------------------------------------------------------------
 
+PACE_S_PER_REQUEST = 4.5   # 60 s / 15 requests per minute (gemini-3.5-flash-lite free tier), plus margin
+
+
 def main(dry: bool = False, questions_path=None) -> None:
     from shop_assistant import config
 
@@ -210,6 +213,8 @@ def main(dry: bool = False, questions_path=None) -> None:
         results.append(r)
         mark = "✓" if _is_correct(r) else "✗"
         print(f"{mark} | {ms:5d} ms | {q[:40]:<40} | {answer[:60]!r}")
+        if not dry:   # free tier: 15 requests/minute per model — stay under it (not counted in ms)
+            time.sleep(PACE_S_PER_REQUEST * agent.last_run.get("llm_calls", 1))
 
     s = score(results)
     times = [r["ms"] for r in results]

@@ -79,7 +79,7 @@ def test_extraction_forces_the_record_products_function(gemini):
     fake = gemini(_record_products)
     extract.extract_batch(POSTS[:2])
     call = fake.calls[0]
-    assert call["model"] == getattr(config, "GEMINI_MODEL", None)
+    assert call["model"] == getattr(config, "GEMINI_EXTRACT_MODEL", None)
     cfg = plain(call["config"])
     fcc = cfg["tool_config"]["function_calling_config"]
     assert str(fcc["mode"]).upper() == "ANY"
