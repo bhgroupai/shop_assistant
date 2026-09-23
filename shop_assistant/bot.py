@@ -5,7 +5,8 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 
 from shop_assistant import config
 
@@ -32,8 +33,9 @@ _bot = None
 # ---------------------------------------------------------------- pure helpers (#13, #14)
 
 def log_turn(chat_id: int, question: str, tools: list[dict], answer: str,
-             escalated: bool, ms: int, usd: float) -> dict:
-    """Build + append one log.jsonl line (SDD §2.6, FR-25). Returns the record."""
+             escalated: bool, ms: int, usd: float, llm_calls: int = 1) -> dict:
+    """Build + append one log.jsonl line (SDD §2.6, FR-25). Returns the record.
+    Ticket #17: the record also carries `llm_calls` (Gemini requests this turn, see llm_calls_for)."""
     rec = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "chat_id": chat_id,
@@ -81,6 +83,52 @@ def post_ids_in(text: str) -> list[int]:
                 break
     return ids
 
+
+
+# ---------------------------------------------------------------- owner commands (ticket #17)
+
+INGEST_LOG_NAME = "gemini_ingest.jsonl"  # in config.DATA_DIR; one line {"ts": ISO, ...} per ingestion Gemini request
+
+
+def llm_calls_for(last_run: dict) -> int:
+    """Gemini requests (LLM + embedding) of one agent turn, from agent.last_run:
+    last_run["llm_calls"] when it is an int, else 1 + len(tools) + number of tools named
+    "semantic_search_tool" (each one embeds the query)."""
+    raise NotImplementedError("ticket #17")
+
+
+def compute_stats(today: date, log_path: Path | None = None, state_path: Path | None = None,
+                  ingest_log_path: Path | None = None) -> dict:
+    """Counts for /stats. Paths default (at call time) to config.LOG_PATH, config.STATE_PATH,
+    config.DATA_DIR / INGEST_LOG_NAME. Only lines whose `ts` date == today count.
+    Keys: indexed_posts (len(search.PRODUCTS)), last_index_at (state.json value or None),
+    questions_today, escalations_today, gemini_today (sum of llm_calls — 1 when absent — plus
+    today's ingest-log lines), gemini_limit (config.GEMINI_DAILY_LIMIT)."""
+    raise NotImplementedError("ticket #17")
+
+
+def format_stats(stats: dict) -> str:
+    """Lines: 'Indexed posts: N', 'Last index: <ts or ->', 'Questions today: N',
+    'Escalations today: N', 'Gemini: N / LIMIT today'."""
+    raise NotImplementedError("ticket #17")
+
+
+async def handle_stats(event) -> None:
+    """Owner /stats → reply format_stats(compute_stats(date.today()))."""
+    raise NotImplementedError("ticket #17")
+
+
+async def handle_reindex(event) -> None:
+    """Owner /reindex → search.reload(), then reply with the new product count."""
+    raise NotImplementedError("ticket #17")
+
+
+async def route(event, owner: int) -> None:
+    """Top-level NewMessage dispatch (run() uses it). Owner in private: '/stats' → handle_stats,
+    '/reindex' → handle_reindex, anything else → handle_owner_reply. Customers (should_handle)
+    → handle_customer, whatever the text (a customer's /stats is a normal question).
+    Groups / channels: ignored."""
+    raise NotImplementedError("ticket #17")
 
 
 # ---------------------------------------------------------------- carousel reply (ticket #19)

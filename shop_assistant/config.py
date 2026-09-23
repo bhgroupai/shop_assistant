@@ -22,6 +22,7 @@ EXTRACT_MAX_TOKENS = 4096
 # gemma4 otherwise spends the whole budget on a `thinking` block and returns no text/tool call (verified 3/3).
 THINKING = {"type": "disabled"}     # gemma4 thinks before the tool call; 10 products per call (spike #3)
 EMBED_MODEL = "bge-m3"           # Ollama, multilingual embeddings, 1024-d
+GEMINI_DAILY_LIMIT = 250        # free-tier requests/day shown by /stats (ticket #17); match the model #23 picks
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
 ROOT = Path(__file__).resolve().parent.parent
