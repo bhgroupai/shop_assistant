@@ -11,17 +11,17 @@ MAX_RESULTS = 5            # FR-18
 FETCH_LIMIT = 500          # FR-1
 CATEGORIES = ["kiyim", "poyabzal", "aksessuar", "boshqa"]   # SDD §2.2
 HISTORY_TURNS = 10         # FR-17
-EXTRACT_BATCH = 5          # NFR-3; 10 made Ollama's gemma4 tool-call parser fail ~1 in 3 responses
+EXTRACT_BATCH = 5          # NFR-3; TODO(#23): measure 5 vs 10 vs 20 on Gemini (scripts/spike_gemini.py) and keep the largest 100%-valid size
 MIN_PRICE = 10_000         # so'm; smaller "prices" from the model are junk → None
 EMBED_BATCH = 128          # NFR-3
 
-MODEL = "gemma4:31b"            # Ollama, tool calling (SDD §1.1)
-MAX_ITERATIONS = 8
-MAX_TOKENS = 1024
-EXTRACT_MAX_TOKENS = 4096
-# gemma4 otherwise spends the whole budget on a `thinking` block and returns no text/tool call (verified 3/3).
-THINKING = {"type": "disabled"}     # gemma4 thinks before the tool call; 10 products per call (spike #3)
-EMBED_MODEL = "bge-m3"           # Ollama, multilingual embeddings, 1024-d
+# Gemini API, free tier, via google-genai (SDD §1.1, SRS C-2). Agent + extraction; shared client in llm.py.
+# TODO(#23): confirm this is the current free-tier Flash model and fill in its limits from
+#   AI Studio -> Rate limits (do not copy numbers from memory or blog posts):
+#   requests/minute = ?, requests/day = ?   (one customer message averages 1.8 requests, max 4)
+GEMINI_MODEL = "gemini-2.5-flash"
+MAX_ITERATIONS = 8               # model requests per customer turn
+EMBED_MODEL = "bge-m3"           # Ollama, multilingual embeddings, 1024-d — until #23.5
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -37,11 +37,7 @@ STATE_PATH = DATA_DIR / "state.json"
 LOG_PATH = DATA_DIR / "log.jsonl"
 
 # Secrets — read lazily so importing config never fails without .env (NFR-6).
-ENV_KEYS = ("TG_CHANNEL", "TG_API_ID", "TG_API_HASH", "TG_BOT_TOKEN", "TG_OWNER_ID")
-
-# The Anthropic SDK talks to Ollama's Anthropic-compatible endpoint; no real key needed.
-os.environ.setdefault("ANTHROPIC_BASE_URL", OLLAMA_URL)
-os.environ.setdefault("ANTHROPIC_API_KEY", "ollama")
+ENV_KEYS = ("TG_CHANNEL", "TG_API_ID", "TG_API_HASH", "TG_BOT_TOKEN", "TG_OWNER_ID", "GEMINI_API_KEY")
 
 
 def secret(name: str) -> str:

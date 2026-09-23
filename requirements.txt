@@ -1,4 +1,5 @@
 anthropic
+google-genai
 ollama
 telethon
 numpy

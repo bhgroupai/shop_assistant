@@ -1,11 +1,15 @@
-"""Tool Runner agent (Anthropic SDK → Ollama) + per-customer history. SDD §3.7, FR-13…18/20. Ticket #10."""
+"""Manual Gemini function-calling loop (google-genai) + per-customer history. SDD §3.7, FR-13…18/20. Tickets #10, #23."""
 import contextvars
 import json
+import logging
 
-import anthropic
+import httpx
+from google.genai import errors, types
 
-from shop_assistant import config
-from shop_assistant.tools import NO_FAQ, NO_RESULTS, TOOLS
+from shop_assistant import config, llm, tools
+from shop_assistant.tools import NO_FAQ, NO_RESULTS
+
+log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are the assistant of a clothing shop whose catalog is its Telegram channel. Rules:
 1. Reply in the customer's language AND script: Uzbek Latin, Uzbek Cyrillic or Russian, exactly as they wrote.
@@ -19,11 +23,12 @@ Be short and friendly; no markdown tables."""
 
 APOLOGY = "Kechirasiz, texnik xatolik. Birozdan keyin qayta urinib ko'ring."
 
-client = anthropic.Anthropic()
-
 current_chat_id: contextvars.ContextVar[int] = contextvars.ContextVar("current_chat_id", default=0)
 
-last_run: dict = {"tools": [], "escalated": False, "usd": 0.0}
+last_run: dict = {"tools": [], "escalated": False, "usd": 0.0, "llm_calls": 0}
+
+# 429 quota / other API errors, 5xx, timeouts and transport errors, missing key (RuntimeError from llm.client()).
+_API_ERRORS = (errors.APIError, httpx.HTTPError, RuntimeError)
 
 
 class History:
@@ -51,53 +56,93 @@ class History:
 _history = History(config.HISTORY_TURNS)
 
 
-def _text_of(message) -> str:
-    """Concatenate text blocks; skips thinking / tool_use blocks (gemma4 may emit `thinking`)."""
-    return "\n".join(b.text for b in message.content if getattr(b, "type", None) == "text").strip()
+def _to_contents(messages: list[dict]) -> list[types.Content]:
+    """Our history format ({"role": "user"|"assistant", "content": str}) -> Gemini contents."""
+    out = []
+    for m in messages:
+        content = m["content"]
+        text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        out.append(types.Content(role="model" if m["role"] == "assistant" else "user",
+                                 parts=[types.Part(text=text)]))
+    return out
+
+
+def _request_config() -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=SYSTEM_PROMPT,
+        tools=[types.Tool(function_declarations=llm.tool_declarations(tools.TOOLS))],
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        http_options=types.HttpOptions(timeout=llm.AGENT_TIMEOUT_S * 1000),
+    )
+
+
+def _text_of(content) -> str:
+    """Concatenate text parts; skips function calls and thought parts."""
+    parts = (content.parts if content is not None else None) or []
+    return "\n".join(p.text for p in parts if p.text and not p.thought).strip()
+
+
+def _run_tool(name: str, args: dict) -> str:
+    """Run the TOOLS entry called `name`; a failing tool becomes an error text the model can read."""
+    tool = next((t for t in tools.TOOLS if t.name == name), None)
+    if tool is None:
+        return f"error: unknown tool {name}"
+    try:
+        out = tool.call(args)
+    except Exception as e:                        # bad arguments or a tool bug: tell the model, keep going
+        log.warning("tool %s failed: %s", name, e)
+        return f"error: {e}"
+    return out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
 
 
 def run_agent(chat_id: int, text: str, history: History | None = None) -> str:
-    """Blocking. tool_runner with TOOLS, max_iterations=8, max_tokens=1024. Returns final reply text."""
+    """Blocking. Manual Gemini function-calling loop over TOOLS, max_iterations=8. Returns final reply text."""
     global last_run
     h = history or _history
     current_chat_id.set(chat_id)
-    run: dict = {"tools": [], "escalated": False, "usd": 0.0}
+    run: dict = {"tools": [], "escalated": False, "usd": 0.0, "llm_calls": 0}
     h.append(chat_id, "user", text)
+    contents = _to_contents(h.get(chat_id))
+    reply = ""
     try:
-        runner = client.beta.messages.tool_runner(
-            model=config.MODEL,
-            max_tokens=config.MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=list(h.get(chat_id)),
-            max_iterations=config.MAX_ITERATIONS,
-            thinking=config.THINKING,
-        )
-        last_message = None
-        for message in runner:
-            last_message = message
-            tool_uses = [b for b in message.content if getattr(b, "type", None) == "tool_use"]
-            if not tool_uses:
-                continue
-            response = runner.generate_tool_call_response() or {"content": []}
-            results = {r["tool_use_id"]: r.get("content", "") for r in response["content"]}
-            for tu in tool_uses:
-                print(f"  · {tu.name}({json.dumps(tu.input, ensure_ascii=False)})")
-                out = results.get(tu.id, "")
-                out = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+        cfg = _request_config()
+        while run["llm_calls"] < config.MAX_ITERATIONS:
+            run["llm_calls"] += 1
+            resp = llm.client().models.generate_content(model=config.GEMINI_MODEL, contents=contents, config=cfg)
+            content = resp.candidates[0].content if resp.candidates else None
+            calls = [p.function_call for p in (content.parts if content is not None else None) or []
+                     if p.function_call]
+            if not calls:
+                reply = _text_of(content)
+                if not reply:
+                    log.warning("chat %s: empty model response", chat_id)
+                break
+            if run["llm_calls"] >= config.MAX_ITERATIONS:
+                # The model would never see these results; do not run them (ask_owner has side effects).
+                log.warning("chat %s: stopped after %d model requests", chat_id, config.MAX_ITERATIONS)
+                break
+            contents.append(content)
+            responses = []
+            for fc in calls:
+                args = dict(fc.args or {})
+                print(f"  · {fc.name}({json.dumps(args, ensure_ascii=False)})")
+                out = _run_tool(fc.name, args)
                 n = 0 if out.strip() in (NO_RESULTS, NO_FAQ) else sum(1 for ln in out.splitlines() if ln.strip())
-                run["tools"].append({"name": tu.name, "input": dict(tu.input), "n_results": n})
-                if tu.name == "ask_owner":
+                run["tools"].append({"name": fc.name, "input": args, "n_results": n})
+                if fc.name == "ask_owner":
                     run["escalated"] = True
-    except anthropic.APIError as e:
-        print(f"  ! APIError: {e}")
+                responses.append(types.Part.from_function_response(name=fc.name, response={"result": out}))
+            contents.append(types.Content(role="user", parts=responses))
+    except _API_ERRORS as e:
+        code = getattr(e, "code", None)
+        log.error("chat %s: Gemini request failed (%s%s): %s", chat_id, type(e).__name__,
+                  f" {code}" if code else "", e)
         last_run = run
         msgs = h.get(chat_id)
         if msgs and msgs[-1] == {"role": "user", "content": text}:
             msgs.pop()          # keep history consistent; the apology is not stored either
         return APOLOGY
     last_run = run
-    reply = _text_of(last_message) if last_message is not None else ""
     h.append(chat_id, "assistant", reply or APOLOGY)
     return reply or APOLOGY
 
