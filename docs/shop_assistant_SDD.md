@@ -1,6 +1,6 @@
 # Software Design Description — Shop Assistant
 
-Version 0.5 · 2026-09-17 · Status: draft · Implements: shop_assistant_SRS.md v0.4
+Version 0.7 · 2026-09-23 · Status: draft · Implements: shop_assistant_SRS.md v0.5
 
 ## 1. Overview
 
@@ -12,8 +12,8 @@ Six stages, one Python module each, every module runnable on its own (NFR-7). Da
  @<channel>                                           customer ⇄ Telegram bot
       │ fetch.py (Telethon, user account)                        │
       ▼                                                          ▼ bot.py
- data/posts.jsonl        raw captions                      agent.py  (Ollama LLM, Tool Runner)
-      │ extract.py (Ollama)                                     │ tools.py
+ data/posts.jsonl        raw captions                      agent.py  (Gemini, manual loop) 
+      │ extract.py (Gemini)                                     │ tools.py
       ▼                                                         ├─ find_products ─┐
  data/products.jsonl     structured records ◀───────────────────┤                 │ search.py
       │ index.py (Ollama)                                       ├─ semantic_search┘
@@ -29,9 +29,9 @@ Six stages, one Python module each, every module runnable on its own (NFR-7). Da
 | Language | Python 3.11+ | same as the rest of the repo |
 | Telegram, channel history | Telethon **user account** | bots cannot read channel history; session pattern reused from `telegram_digest/tgclient.py` |
 | Telegram, customers + owner | Telethon **bot account** (BotFather token) | customers must not talk to a personal account; bot can message the owner; pattern from `telegram_digest/approval.py` |
-| LLM | **Ollama** on a GPU server (RTX 5090), model `gemma4:31b` (tool calling), called through the Anthropic SDK's Anthropic-compatible endpoint (`ANTHROPIC_BASE_URL` → Ollama) with `client.beta.messages.tool_runner` | C-2; same agent loop as `telegram_digest/agent.py` |
-| Embeddings | **Ollama** `bge-m3` (multilingual, 1024-d) via the `ollama` Python client, same server | C-2; covers uz-Latin / uz-Cyrillic / ru |
-| Reaching Ollama | On the same LAN `http://<gpu-host>:11434`; elsewhere `ssh -N -L 11434:localhost:11434 <gpu-host>` then `http://localhost:11434`; on the server itself `localhost` | no auth on the API — never expose it publicly |
+| LLM | **Gemini API, free tier** (hosted by Google), a Flash model (`config.GEMINI_MODEL`) with function calling, through the official `google-genai` SDK. One shared client in `llm.py`, created lazily from `GEMINI_API_KEY`. The Anthropic SDK cannot be used: Gemini has no Anthropic-compatible endpoint | C-2 v0.5: no local models; removes the cold model load (54 s) and the GPU dependency. Privacy trade-off: questions and captions go to Google (SRS C-2) |
+| Embeddings | **Ollama** `bge-m3` (multilingual, 1024-d) via the `ollama` Python client, same server — until #23.5 moves them to Gemini too | covers uz-Latin / uz-Cyrillic / ru |
+| Reaching Ollama (embeddings only, until #23.5) | On the same LAN `http://<gpu-host>:11434`; elsewhere `ssh -N -L 11434:localhost:11434 <gpu-host>` then `http://localhost:11434`; on the server itself `localhost` | no auth on the API — never expose it publicly |
 | Vector store | `numpy` array + cosine similarity | ≤ a few thousand posts; a DB adds nothing to learn yet |
 | Storage | JSONL files under `data/` | greppable, diffable, restart-safe (FR-6) |
 | Secrets | `.env` via `python-dotenv` | NFR-6 |
@@ -87,8 +87,10 @@ FAQ entries are embedded too (separate `faq_embeddings.npy`), so `search_faq` is
 
 ### 3.2 `extract.py` — FR-3a, FR-3b, FR-4
 - `strip_footer(caption) -> body`: drop lines matching phone / `@handle` / `📍` / delivery boilerplate; strip emoji.
-- `extract(body) -> Product` — one LLM call (Ollama, `config.MODEL`) with a JSON schema (tool-use with a single `record_product` tool, forced) so the output is always valid. Prompt gives the fixed category list, price notation examples (`980.000ming` → 980000), and asks for keywords in uz-Latin, uz-Cyrillic, ru, en.
-- Batches of 10 posts per call to keep NFR-3. `max_tokens ≥ 1000`: `gemma4:31b` emits a `thinking` block before the `tool_use` block; with 200 tokens the call is cut off before the tool call (spike #3).
+- `extract(body) -> Product` — one Gemini call (`config.GEMINI_MODEL`) through `llm.client()` with the `record_products` function **forced** (function-calling mode `ANY`, allowed names = `record_products`) so the output is always a structured call. The schema is `extract._TOOL` (Anthropic-style), converted by `llm.tool_declarations`. Prompt gives the fixed category list, price notation examples (`980.000ming` → 980000), and asks for keywords in uz-Latin, uz-Cyrillic, ru, en.
+- The deterministic guards (price notation, `_sane_price`, `product_name`, `is_announcement`) run on the model output unchanged: they do not depend on the model.
+- Batches of `config.EXTRACT_BATCH` posts per call (NFR-3; fewer requests = less free quota). Timeout `llm.EXTRACT_TIMEOUT_S` per request.
+- Errors: a 429 / 5xx / timeout is retried with exponential backoff; on the final failure the batch raises and `main()` logs an ERROR and stops, so no half batch is written and the posts stay un-extracted for the next run.
 - CLI: `python -m shop_assistant.extract` processes posts not yet in `products.jsonl`.
 
 ### 3.3 `index.py` — FR-5, FR-6
@@ -127,7 +129,9 @@ Thin `@beta_tool` wrappers around §3.5 that return compact text (one line per p
   3. Never state price, size or availability not in tool output. Never guess stock.
   4. Escalate with `ask_owner` when: stock/availability asked, nothing relevant found, or question is outside the catalog.
   5. Max 5 products per reply; if more, ask the customer to narrow down. Always include links. Mark stale posts with the "may be sold out" note.
-- `max_iterations=8`, `max_tokens=1024`, model `config.MODEL` = `gemma4:31b` (NFR-1/NFR-2; switch to `qwen2.5:32b` only if the eval demands it).
+- Manual function-calling loop over `llm.client().models.generate_content` (automatic function calling **off**): each model `function_call` runs the matching `TOOLS` entry, the model turn and the `function_response` are appended, repeat until the model answers with text or `config.MAX_ITERATIONS = 8` requests were made (then the polite apology). Tool declarations come from `TOOLS` via `llm.tool_declarations` (single source of truth). History keeps the `{"role": "user"|"assistant", "content": str}` format; assistant turns are sent to Gemini as role `model`. Timeout `llm.AGENT_TIMEOUT_S` (15 s) per request.
+- `agent.last_run` = `{"tools": [{name, input, n_results}], "escalated", "usd": 0.0, "llm_calls"}` for `bot.py` / eval.
+- Errors (429 quota, 5xx, timeout, invalid/missing key): one ERROR log line, the customer gets `APOLOGY`, the failed turn is not stored. No paid fallback when the daily quota runs out (SRS NFR-2).
 
 ### 3.8 `bot.py` — FR-19, FR-21, FR-22, FR-26, C-5
 - One Telethon bot client. Handlers:
@@ -139,7 +143,7 @@ Thin `@beta_tool` wrappers around §3.5 that return compact text (one line per p
 - Logs every turn to `log.jsonl` (FR-25).
 
 ### 3.9 `config.py`
-`CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`MODEL = "gemma4:31b"`, `EMBED_MODEL = "bge-m3"`), paths. From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `OLLAMA_URL` (default `http://localhost:11434`). The Anthropic SDK is pointed at Ollama by setting `ANTHROPIC_BASE_URL = OLLAMA_URL` and a dummy `ANTHROPIC_API_KEY`.
+`CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`GEMINI_MODEL` — a free-tier Flash model; its requests-per-minute / per-day limits are written next to it from AI Studio → Rate limits; `EMBED_MODEL = "bge-m3"` until #23.5), `MAX_ITERATIONS = 8`, paths. From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `GEMINI_API_KEY` (read lazily with `secret()`), `OLLAMA_URL` (default `http://localhost:11434`, embeddings only). `llm.py` holds the shared Gemini client, `tool_declarations()` and the timeouts.
 
 ### 3.10 `main.py`
 Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service: admin runs `fetch → extract → index` by hand or cron (FR-23), then sends `/reindex` to the bot (calls `search.reload()`).
@@ -165,7 +169,7 @@ shop_assistant/                   # repo root; run everything from here
   docs/shop_assistant_SRS.md, shop_assistant_SDD.md
   shop_assistant/                 # the package: `python -m shop_assistant.fetch`
     config.py  models.py  textnorm.py  fetch.py  extract.py  index.py  search.py
-    tools.py   agent.py   bot.py      main.py
+    llm.py     tools.py   agent.py    bot.py      main.py
   eval/questions.jsonl        # 20 questions, expected: {"posts":[ids]} or {"escalate":true}
   eval/run_eval.py            # runs agent offline (ask_owner stubbed), prints AC-2..AC-4
   tests/                      # only tests for merged work; a ticket's tests live on its branch until merged
@@ -186,8 +190,8 @@ shop_assistant/                   # repo root; run everything from here
 | FR-19, 21, 22 | bot.py `escalate` + owner-reply handler, tools.ask_owner |
 | FR-23, 24 | CLIs of fetch/extract/index/search |
 | FR-25, 26 | bot.py logging, `/stats` |
-| NFR-1, 2 | Sonnet, max_iterations=8, compact tool output |
-| NFR-3 | extract batching (10/call), embed batching (128) |
+| NFR-1, 2 | Gemini free-tier Flash model, max_iterations=8, compact tool output |
+| NFR-3 | extract batching (`EXTRACT_BATCH`/call), embed batching (128) |
 | NFR-4 | in-memory history, log stores question text only |
 | NFR-5 | systemd `Restart=always` |
 | NFR-6 | `.env`, `data/` and `session/` gitignored |
@@ -198,8 +202,9 @@ shop_assistant/                   # repo root; run everything from here
 
 ## 7. Risks
 - Ollama swaps models on demand and only one ~19 GB model fits the GPU at a time: alternating `gemma4:31b` and `bge-m3` calls costs seconds per swap → ingestion embeds in one pass after extraction; the bot calls embed only on the semantic fallback.
-- `gemma4:31b` tool calling through the Anthropic-compatible endpoint (forced `tool_choice`) is unverified → ticket #3 spike checks it before #5/#10.
-- Deploy target is the GPU server itself so Ollama is `localhost`.
+- The free-tier quota is per project per day and shared by customers, extraction, eval and development → the bot answers "try again later" when it runs out; watch `log.jsonl` for 429s; use a separate AI Studio key for development.
+- On the free tier Google may use prompts to improve its products (SRS C-2 privacy trade-off).
+- A stronger hosted model may be more eager to fill in numbers → watch the eval's `invented` count, not only `correct`.
 - Category list too narrow → `boshqa` bucket; review after first extract run.
 - Customer sends a photo/voice only → agent gets `<media>`; reply asking for text (v1), photo search is out of scope.
 - Owner forgets to *reply* to the `#esc` message → bot answers the owner with a hint.
@@ -212,5 +217,6 @@ shop_assistant/                   # repo root; run everything from here
 | 0.3 | 2026-09-17 | §5: tests per ticket live on the ticket branch (senior-written), `main` keeps only merged tests; CI added |
 | 0.5 | 2026-09-17 | Spike #3 results: embed normalised text (§3.3, §3.5, D-3); `max_tokens ≥ 1000` for extraction (§3.2) |
 | 0.6 | 2026-09-21 | S4: §3.8 carousel reply (D-8); §3.2 product names = type + brand (`product_name` guard) and announcements → `boshqa` (`is_announcement`); §3.5 search excludes `boshqa` (D-9); tools number results, `narxi: so'rab beraman` + offer line (#21) |
+| 0.8 | 2026-09-23 | SRS v0.5 C-2 (#23): no local models — agent and extraction on a Gemini free-tier model via `google-genai`; new `llm.py` (client, tool-schema conversion, timeouts); §1.1, §3.2, §3.7, §3.9, §7 updated; embeddings stay on Ollama until #23.5 |
 | 0.7 | 2026-09-23 | #17: owner `/stats` (indexed posts, last index, questions/escalations today, `Gemini: N / GEMINI_DAILY_LIMIT today` from `log.jsonl` + `gemini_ingest.jsonl`) and `/reindex` (`search.reload()`); §2.6 `log.jsonl` gains `llm_calls`; `run()` dispatches through `bot.route` |
 | 0.4 | 2026-09-17 | SRS C-2 v0.4: Claude + Voyage replaced by Ollama on the GPU server (`gemma4:31b`, `bge-m3`); §1.1, §3.2, §3.3, §3.7, §3.9, §7 updated; deploy target = the GPU server |

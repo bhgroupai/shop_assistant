@@ -1,11 +1,15 @@
-"""Footer strip + LLM structured extraction (Ollama via Anthropic SDK). SDD §3.2, FR-3a/3b/4. Ticket #5."""
+"""Footer strip + LLM structured extraction (Gemini via google-genai). SDD §3.2, FR-3a/3b/4. Tickets #5, #23."""
 import dataclasses
 import json
+import logging
 import re
 import time
 import unicodedata
 
-from shop_assistant import config
+import httpx
+from google.genai import errors, types
+
+from shop_assistant import config, llm
 from shop_assistant.models import Post, Product
 from shop_assistant.textnorm import normalise
 
@@ -156,9 +160,10 @@ name: what the customer reads first. It is the PRODUCT TYPE (krossovka, kurtka, 
 """
 
 
-def _client():
-    import anthropic
-    return anthropic.Anthropic()
+log = logging.getLogger(__name__)
+
+RETRIES = 5                # attempts per request on 429 / 5xx / timeout
+BACKOFF_S = 5.0            # first wait; doubles each retry (5, 10, 20, 40 s) — lets a per-minute quota recover
 
 
 def _sane_price(v: int | None) -> int | None:
@@ -276,32 +281,61 @@ def _build(post: Post, body: str, item: dict) -> Product:
     )
 
 
-def _call_llm(client, posts: list[Post], bodies: dict[int, str]) -> dict[int, dict]:
-    user = "\n\n".join(f"### id={p.id}\n{bodies[p.id]}" for p in posts)
-    resp = client.messages.create(
-        model=config.MODEL,
-        max_tokens=config.EXTRACT_MAX_TOKENS,
-        system=_SYSTEM,
-        tools=[_TOOL],
-        tool_choice={"type": "tool", "name": "record_products"},
-        thinking=config.THINKING,
-        messages=[{"role": "user", "content": user}],
+def _request_config() -> types.GenerateContentConfig:
+    """Force the record_products function (mode ANY, one allowed name); automatic calling off."""
+    return types.GenerateContentConfig(
+        system_instruction=_SYSTEM,
+        tools=[types.Tool(function_declarations=llm.tool_declarations([_TOOL]))],
+        tool_config=types.ToolConfig(function_calling_config=types.FunctionCallingConfig(
+            mode=types.FunctionCallingConfigMode.ANY, allowed_function_names=[_TOOL["name"]])),
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        http_options=types.HttpOptions(timeout=llm.EXTRACT_TIMEOUT_S * 1000),
     )
+
+
+def _is_transient(e: Exception) -> bool:
+    """429 quota, 5xx and timeouts / connection drops are worth retrying; a bad key or request is not."""
+    if isinstance(e, errors.ServerError):
+        return True
+    if isinstance(e, errors.ClientError):
+        return e.code == 429
+    return isinstance(e, httpx.TransportError)
+
+
+def _generate(contents: str):
+    """One generate_content request, retried with exponential backoff on transient errors.
+    The last error is re-raised, so the caller writes nothing for this batch."""
+    for attempt in range(RETRIES):
+        try:
+            return llm.client().models.generate_content(
+                model=config.GEMINI_MODEL, contents=contents, config=_request_config())
+        except (errors.APIError, httpx.TransportError) as e:
+            if not _is_transient(e) or attempt == RETRIES - 1:
+                raise
+            wait = BACKOFF_S * 2 ** attempt
+            log.warning("extraction request failed (%s), retry %d/%d in %.0f s",
+                        type(e).__name__, attempt + 1, RETRIES - 1, wait)
+            time.sleep(wait)
+
+
+def _call_llm(posts: list[Post], bodies: dict[int, str]) -> dict[int, dict]:
+    user = "\n\n".join(f"### id={p.id}\n{bodies[p.id]}" for p in posts)
+    resp = _generate(user)
+    content = resp.candidates[0].content if resp.candidates else None
+    calls = [p.function_call for p in (content.parts if content is not None else None) or []
+             if p.function_call and p.function_call.name == _TOOL["name"]]
+    if not calls:
+        # Blocked / empty candidate or no function call despite mode ANY: the caller retries / splits.
+        raise _LLMParseError("no record_products call in the response")
     items: dict[int, dict] = {}
-    if not resp.content:
-        # Ollama's gemma4 tool-call parser sometimes fails on the model's own quoting and
-        # returns content=null; the caller retries / splits the batch.
-        raise _LLMParseError("empty content (tool-call parse failed on the server)")
-    for block in resp.content:            # gemma4 may emit a `thinking` block first (SDD §3.2)
-        if getattr(block, "type", None) != "tool_use":
-            continue
-        data = block.input
+    for call in calls:
+        data = call.args or {}
         if isinstance(data, str):
             data = json.loads(data)
-        for item in (data or {}).get("products", []) or []:
+        for item in data.get("products", []) or []:
             try:
                 items[int(item.get("id"))] = item
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, AttributeError):
                 continue
     return items
 
@@ -310,14 +344,14 @@ class _LLMParseError(RuntimeError):
     pass
 
 
-def _extract_chunk(client, chunk: list[Post]) -> list[Product]:
+def _extract_chunk(chunk: list[Post]) -> list[Product]:
     """One LLM call for `chunk`; on a parse failure retry once, then split in halves; a single
     post that still fails becomes a fallback record (no price guessing)."""
     bodies = {p.id: strip_footer(p.caption) for p in chunk}
     items: dict[int, dict] | None = None
     for _ in range(2):
         try:
-            items = _call_llm(client, chunk, bodies)
+            items = _call_llm(chunk, bodies)
             break
         except _LLMParseError:
             continue
@@ -325,7 +359,7 @@ def _extract_chunk(client, chunk: list[Post]) -> list[Product]:
         if len(chunk) == 1:
             return [_fallback(chunk[0], bodies[chunk[0].id])]
         mid = len(chunk) // 2
-        return _extract_chunk(client, chunk[:mid]) + _extract_chunk(client, chunk[mid:])
+        return _extract_chunk(chunk[:mid]) + _extract_chunk(chunk[mid:])
     return [(_build(p, bodies[p.id], items[p.id]) if items.get(p.id) else _fallback(p, bodies[p.id]))
             for p in chunk]
 
@@ -334,10 +368,9 @@ def extract_batch(posts: list[Post]) -> list[Product]:
     """Batches of config.EXTRACT_BATCH per call (NFR-3)."""
     if not posts:
         return []
-    client = _client()
     out: list[Product] = []
     for start in range(0, len(posts), config.EXTRACT_BATCH):
-        out.extend(_extract_chunk(client, posts[start:start + config.EXTRACT_BATCH]))
+        out.extend(_extract_chunk(posts[start:start + config.EXTRACT_BATCH]))
     return out
 
 
@@ -388,14 +421,21 @@ def main() -> None:
         for start in range(0, len(todo), config.EXTRACT_BATCH):
             chunk = todo[start:start + config.EXTRACT_BATCH]
             t0 = time.perf_counter()
-            products = extract_batch(chunk)
+            try:
+                products = extract_batch(chunk)
+            except (errors.APIError, httpx.HTTPError, RuntimeError) as e:
+                # Quota / server / timeout after all retries, bad or missing key: stop here. Nothing of
+                # this batch is written, so these posts stay un-extracted and the next run picks them up.
+                log.error("extraction stopped at batch %d-%d of %d (%s: %s); %d products written this run",
+                          start + 1, start + len(chunk), len(todo), type(e).__name__, e, count)
+                return
             dt = time.perf_counter() - t0
-            for prod in products:
-                f.write(json.dumps(dataclasses.asdict(prod), ensure_ascii=False) + "\n")
+            f.write("".join(json.dumps(dataclasses.asdict(prod), ensure_ascii=False) + "\n" for prod in products))
             f.flush()
             count += len(products)
             print(f"{count}/{len(todo)} products  (batch of {len(chunk)} in {dt:.1f}s)")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     main()
