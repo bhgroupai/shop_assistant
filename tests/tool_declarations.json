@@ -1,7 +1,7 @@
 [
  {
   "name": "find_products_tool",
-  "description": "Filter the shop catalog. All given filters are ANDed; newest posts first. Returns one numbered product per line: N. name · price · sizes · date · link (· [eskirgan] if the post is old), or \"no results\". Items without a price show \"narxi: so'rab beraman\"; then a final offer line tells the customer to write the item number to ask for its price.",
+  "description": "Filter the shop catalog. All given filters are ANDed; newest posts first. Returns at most 5 numbered products per call: N. name · price · sizes · date · link (· [eskirgan] if the post is old), or \"no results\". Items without a price show \"narxi: so'rab beraman\"; then an offer line tells the customer to write the item number to ask for its price. The last line gives the shown range and the total, e.g. \"ko'rsatildi 1–5, jami 23; keyingilari: shu filtrlar bilan offset=5\"; to show more, call again with the same filters and that offset.",
   "parameters": {
    "properties": {
     "category": {
@@ -36,6 +36,10 @@
      "type": "array",
      "description": "Product keywords in any language or script (uz Latin, uz Cyrillic, ru, en),\ne.g. [\"krossovka\"], [\"кроссовки\"], [\"kurtka\", \"jacket\"].",
      "nullable": true
+    },
+    "offset": {
+     "type": "integer",
+     "description": "How many matching products to skip (0 = from the first). To show the next ones, use the offset given in the last line of the previous result."
     }
    },
    "type": "object"
@@ -43,7 +47,7 @@
  },
  {
   "name": "semantic_search_tool",
-  "description": "Meaning-based search over the catalog for descriptive questions when find_products_tool returned \"no results\" (e.g. \"something warm for winter\", \"подарок для мамы\"). Returns one product per line (same format as find_products_tool) or \"no results\".",
+  "description": "Meaning-based search over the catalog for descriptive questions when find_products_tool returned \"no results\" (e.g. \"something warm for winter\", \"подарок для мамы\"). Returns one product per line (same format as find_products_tool, including the last range/total line; at most the 20 closest products in total) or \"no results\".",
   "parameters": {
    "properties": {
     "text": {
@@ -54,6 +58,10 @@
      "type": "integer",
      "description": "Maximum price in so'm (UZS).",
      "nullable": true
+    },
+    "offset": {
+     "type": "integer",
+     "description": "How many matching products to skip (0 = from the first). To show the next ones, use the offset given in the last line of the previous result."
     }
    },
    "required": [
@@ -64,12 +72,16 @@
  },
  {
   "name": "latest_posts_tool",
-  "description": "The newest posts in the shop channel (\"what's new?\", \"yangi tovarlar bormi?\"). Returns one product per line (same format as find_products_tool) or \"no results\".",
+  "description": "The newest posts in the shop channel (\"what's new?\", \"yangi tovarlar bormi?\"). Returns one product per line (same format as find_products_tool, including the last range/total line) or \"no results\".",
   "parameters": {
    "properties": {
     "n": {
      "description": "How many latest products to return (1-5).",
      "type": "integer"
+    },
+    "offset": {
+     "type": "integer",
+     "description": "How many matching products to skip (0 = from the first). To show the next ones, use the offset given in the last line of the previous result."
     }
    },
    "type": "object"

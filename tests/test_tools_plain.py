@@ -4,7 +4,8 @@ CONTRACT: every TOOLS entry is a plain definition (no anthropic `beta_tool`) wit
 `name` (str), `description` (str), `input_schema` (JSON-schema dict: type object, properties, required)
 and `call(args: dict) -> str`, which runs the same function as before. TOOLS stays the single source of
 truth for `llm.tool_declarations`. What the model sees must not change: tests/tool_declarations.json is
-the Gemini view of the #23 tools (descriptions compared with whitespace collapsed).
+the Gemini view of the #23 tools (descriptions compared with whitespace collapsed). Updated for #25: the three
+listing tools take `offset` and their descriptions mention the range/total line (tests/test_tools_paging.py).
 """
 import json
 from pathlib import Path
@@ -71,15 +72,16 @@ def test_call_runs_find_products_with_the_model_args(monkeypatch, products):
     out = _tool("find_products_tool").call({"keywords": ["krossovka"], "size": "42"})
     assert out.startswith("1. Krossovka Nike Air · 350000")
     assert seen["keywords"] == ["krossovka"] and seen["size"] == "42"
-    assert seen["limit"] == config.MAX_RESULTS
 
 
 def test_call_runs_latest_posts_and_clamps_n(monkeypatch, products):
-    asked = []
-    monkeypatch.setattr(search, "latest_posts", lambda n: asked.append(n) or products[:2])
+    # #25: the tool may ask for more than a page (to know the total) and slices the page itself
+    two = products[:2]
+    monkeypatch.setattr(search, "latest_posts", lambda n=5, products=None: two)
     out = _tool("latest_posts_tool").call({"n": 50})
-    assert asked == [config.MAX_RESULTS]
-    assert out.splitlines()[0].startswith("1. Dvoyka")
+    numbered = [ln for ln in out.splitlines() if ln[:1].isdigit()]
+    assert 1 <= len(numbered) <= config.MAX_RESULTS
+    assert numbered[0].startswith("1. Dvoyka")
 
 
 def test_call_runs_semantic_search(monkeypatch, products):
