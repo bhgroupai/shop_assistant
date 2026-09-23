@@ -204,6 +204,7 @@ shop_assistant/                   # repo root; run everything from here
 
 ## 7. Risks
 - Embeddings and the matrix must come from the same model: deploying new code without re-indexing (or the reverse) turns semantic search off (load guard, §3.5) → deploy code and the rebuilt `data/embeddings*` together.
+- Embedding free quota (measured 2026-09-23): 100 embed requests/minute per model, and every text in a batch counts as one → a 134-product re-index needs ~2 minutes of retries, and while it runs customer query embeddings can hit 429 (semantic search then returns nothing for that turn; filters still work).
 - The free-tier quota is per project per day and shared by customers, extraction, eval and development → the bot answers "try again later" when it runs out; watch `log.jsonl` for 429s; use a separate AI Studio key for development.
 - On the free tier Google may use prompts to improve its products (SRS C-2 privacy trade-off).
 - A stronger hosted model may be more eager to fill in numbers → watch the eval's `invented` count, not only `correct`.
