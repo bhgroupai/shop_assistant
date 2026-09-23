@@ -85,6 +85,6 @@ def test_semantic_search_skips_boshqa(products, monkeypatch):
     monkeypatch.setattr(search, "_ids", [ann.id, products[1].id])
     monkeypatch.setattr(search, "_matrix", np.array([[1.0, 0.0], [0.0, 1.0]]))
     from shop_assistant import index
-    monkeypatch.setattr(index, "embed", lambda texts: np.array([[1.0, 0.0]]))
+    monkeypatch.setattr(index, "embed", lambda texts, **kw: np.array([[1.0, 0.0]]))
     ids = [p.id for p in search.semantic_search("yengi kolleksiya")]
     assert 695 not in ids and products[1].id in ids
