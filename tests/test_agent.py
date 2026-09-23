@@ -1,6 +1,7 @@
 """Ticket #10 — FR-17 history (pure part); ticket #23 — run_agent on Gemini through the llm seam
 (fake client, no network; the seam is documented at the top of tests/test_llm.py)."""
 import logging
+import time
 
 import pytest
 
@@ -40,6 +41,12 @@ def test_history_clear():
 
 
 # --- ticket #23: run_agent on Gemini ------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    """Ticket #26: agent retries 5xx / timeouts once after time.sleep; never wait for real in tests."""
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+
 
 @pytest.fixture
 def gemini(monkeypatch):
@@ -136,6 +143,8 @@ def test_history_format_is_kept_and_sent_to_the_model(gemini, catalog):
 @pytest.mark.parametrize("error", [quota_error, server_error, timeout_error, invalid_key_error],
                          ids=["429", "503", "timeout", "invalid-key"])
 def test_api_errors_give_polite_reply_and_one_error_log(gemini, catalog, caplog, error):
+    """503 / timeout fail twice here (the fake repeats its last entry): since #26 that is one retry,
+    one WARNING, then still exactly one ERROR (tests/test_agent_retry.py covers the retry itself)."""
     h = History()
     gemini(error())
     reply = agent.run_agent(507, QUESTION, h)
