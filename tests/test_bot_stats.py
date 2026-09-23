@@ -119,7 +119,7 @@ def test_log_turn_writes_llm_calls(paths):
 def test_handle_customer_logs_llm_calls(paths, monkeypatch):
     from shop_assistant import agent
 
-    def fake_run_agent(chat_id, text):
+    def fake_run_agent(chat_id, text, **kw):   # #24 passes lang=
         agent.last_run = {"tools": [{"name": "find_products_tool", "input": {"size": "42"},
                                      "n_results": 1}], "escalated": False, "usd": 0.0}
         return "Ha, 42 razmer bor."
@@ -289,7 +289,7 @@ def test_customer_stats_gets_normal_reply(paths, products_list, monkeypatch):
     from shop_assistant import agent
     seen: list[str] = []
 
-    def fake_run_agent(chat_id, text):
+    def fake_run_agent(chat_id, text, **kw):   # #24 passes lang=
         seen.append(text)
         return "Qaysi mahsulot kerak? Nomini yozing."
 

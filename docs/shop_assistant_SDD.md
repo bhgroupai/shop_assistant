@@ -1,6 +1,6 @@
 # Software Design Description — Shop Assistant
 
-Version 1.0 · 2026-09-23 · Status: draft · Implements: shop_assistant_SRS.md v0.5
+Version 1.1 · 2026-09-23 · Status: draft · Implements: shop_assistant_SRS.md v0.5
 
 ## 1. Overview
 
@@ -76,6 +76,9 @@ FAQ entries are embedded too (separate `faq_embeddings.npy`), so `search_faq` is
 `{"ts", "chat_id", "question", "tools": [{"name", "input", "n_results"}], "answer", "escalated": bool, "ms", "usd", "llm_calls": int}`
 (`llm_calls` = Gemini requests that turn, LLM + query embeddings; older lines without it count 1.)
 
+### 2.7 `languages.json` — customer language per chat, written by lang.py (FR-13a)
+One JSON object (not JSON lines): `{"<chat_id>": "uz_latn" | "uz_cyrl" | "ru"}`. Only chat id → language code, no message text (NFR-4). Written only when a chat's language changes, atomically (temp file in the same dir + rename). Missing or corrupt → one WARNING, empty store, languages are re-detected.
+
 ## 3. Components
 
 ### 3.1 `fetch.py` — FR-1, FR-2, FR-3, FR-7
@@ -123,10 +126,10 @@ Thin wrappers around §3.5, declared with the plain `tools.tool` decorator (no S
 - `ask_owner(question: str, post_ids: list[int]) -> str` — calls `bot.escalate(...)` through `run_coroutine_threadsafe` (same thread-bridge as `tgclient.run`). Returns `"forwarded"`.
 
 ### 3.7 `agent.py` — FR-13…FR-18, FR-20
-- `run_agent(chat_id, text) -> str`, blocking, run in a worker thread.
+- `run_agent(chat_id, text, history=None, lang="uz_latn") -> str`, blocking, run in a worker thread.
 - Per-customer history: `dict[chat_id, list[message]]`, last 10 turns, in memory only (FR-17, NFR-4).
 - System prompt (rules, kept short):
-  1. Answer in the customer's language and script.
+  1. One explicit line for the chat's language (`run_agent(..., lang=)`, from `lang.resolve`): "Answer in Russian" / "Answer in Uzbek, Latin script" / "Answer in Uzbek, Cyrillic script"; the fixed phrases the model copies (ask-price, offer line, stale note) come from `lang.TEXTS[lang]`.
   2. First `find_products`; if empty and the question has a descriptive part, `semantic_search`. For delivery/payment/other shop questions, `search_faq`.
   3. Never state price, size or availability not in tool output. Never guess stock.
   4. Escalate with `ask_owner` when: stock/availability asked, nothing relevant found, or question is outside the catalog.
@@ -139,13 +142,19 @@ Thin wrappers around §3.5, declared with the plain `tools.tool` decorator (no S
 - One Telethon bot client. Handlers:
   - `NewMessage(incoming, is_private, sender != owner)` → `asyncio.to_thread(run_agent, chat_id, text)` → reply. Groups are ignored (C-5).
   - **Carousel reply (S4, #19).** When the agent's text names posts, the customer gets ONE message: item 1's photo/video (the channel logo when the post has none), a card caption (`N. name` / `Narxi:` / `O'lcham:` / `Sana:` / stale warning) and inline buttons `◀ · N/n · ▶`, `Narxini so'rash` (only when the item has no price → `escalate` with that post id), `Kanalda ko'rish`. `CallbackQuery` edits the message in place; callback data `c:<idx>:<ids>` is self-contained (≤ 64 bytes) so navigation survives restarts. Text-only fallback (no link preview) when the send fails. The agent's numbered text still carries every link (FR-11/FR-14, eval parses ids) — it is the caption source, not shown as a list.
+  - **Customer language (#24, FR-13a).** Before each customer message `lang.resolve(chat_id, text, sender.lang_code)`: a clear detection from the text wins and is stored; otherwise the stored language; on first contact Telegram's `lang_code` (`ru` → ru, else uz_latn). `/start` is answered with `lang.TEXTS[l]["greeting"]` and no LLM call. Carousel labels, buttons, stale note, escalation/error replies and callback toasts use `lang.TEXTS` for the chat's language (callbacks read the store). Owner-facing texts (`#esc`, hints) stay Uzbek.
   - `escalate(customer_id, question, post_ids)` → message to `TG_OWNER_ID`: `"#esc <customer_id>\n<question>\n<links>"`. Tells the customer "Egasi tez orada javob beradi".
   - `NewMessage` from owner **that is a reply** to an `#esc` message → parse `customer_id` from the quoted text → forward owner's text to the customer → append to `faq.jsonl` → `index.reindex_faq()`.
   - `/stats` from owner only → counts from `state.json` and today's `log.jsonl`.
 - Logs every turn to `log.jsonl` (FR-25).
 
+### 3.8a `lang.py` — FR-13, FR-13a
+- `detect(text)` → `uz_latn` / `uz_cyrl` / `ru` / None: letter and word rules, no LLM (Uzbek Cyrillic letters/words first, then Russian letters/words, then Latin Uzbek markers; needs ≥ 2 words or 8 letters; the dominant script wins so one foreign word does not flip). Cyrillic words are matched through `textnorm`'s transliteration table.
+- `LanguageStore` over `data/languages.json` (§2.7), `get_store()`, `resolve()`, `from_lang_code()`.
+- `TEXTS[lang][key]`: every customer-facing fixed text (greeting, buttons, stale note, escalation/error replies, callback toasts, ask-price phrase, offer line, card labels).
+
 ### 3.9 `config.py`
-`CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`GEMINI_MODEL` for the agent, `GEMINI_EXTRACT_MODEL` for extraction — free-tier Flash models; measured limits written next to them; `EMBED_MODEL = "gemini-embedding-001"`, `EMBED_DIM = 768`, `EMBED_BATCH = 100`), `MAX_ITERATIONS = 8`, paths (incl. `EMBEDDINGS_META_PATH`). From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `GEMINI_API_KEY` (read lazily with `secret()`). `llm.py` holds the shared Gemini client, `tool_declarations()` and the timeouts.
+`CHANNEL` (from env `TG_CHANNEL`, the shop channel username without @), `STALE_DAYS = 60`, `MAX_RESULTS = 5`, `CATEGORIES = [...]`, `FETCH_LIMIT = 500`, model names (`GEMINI_MODEL` for the agent, `GEMINI_EXTRACT_MODEL` for extraction — free-tier Flash models; measured limits written next to them; `EMBED_MODEL = "gemini-embedding-001"`, `EMBED_DIM = 768`, `EMBED_BATCH = 100`), `MAX_ITERATIONS = 8`, paths (incl. `EMBEDDINGS_META_PATH`, `LANGUAGES_PATH = DATA_DIR / "languages.json"`). From env: `TG_CHANNEL`, `TG_API_ID`, `TG_API_HASH`, `TG_BOT_TOKEN`, `TG_OWNER_ID`, `GEMINI_API_KEY` (read lazily with `secret()`). `llm.py` holds the shared Gemini client, `tool_declarations()` and the timeouts.
 
 ### 3.10 `main.py`
 Loads `.env`, starts the bot, runs forever. Ingestion is **not** in the service: admin runs `fetch → extract → index` by hand or cron (FR-23), then sends `/reindex` to the bot (calls `search.reload()`).
@@ -171,7 +180,7 @@ shop_assistant/                   # repo root; run everything from here
   docs/shop_assistant_SRS.md, shop_assistant_SDD.md
   shop_assistant/                 # the package: `python -m shop_assistant.fetch`
     config.py  models.py  textnorm.py  fetch.py  extract.py  index.py  search.py
-    llm.py     tools.py   agent.py    bot.py      main.py
+    llm.py     tools.py   agent.py    bot.py      main.py    lang.py
   eval/questions.jsonl        # 20 questions, expected: {"posts":[ids]} or {"escalate":true}
   eval/run_eval.py            # runs agent offline (ask_owner stubbed), prints AC-2..AC-4
   tests/                      # only tests for merged work; a ticket's tests live on its branch until merged
@@ -189,12 +198,13 @@ shop_assistant/                   # repo root; run everything from here
 | FR-5, 6 | index.py |
 | FR-8, 9, 10, 11, 12 | search.py, textnorm.py |
 | FR-13–18, 20 | agent.py (system prompt + history) |
+| FR-13, 13a | lang.py (detection, per-chat store, fixed texts), bot.py, agent.py (answer-in line) |
 | FR-19, 21, 22 | bot.py `escalate` + owner-reply handler, tools.ask_owner |
 | FR-23, 24 | CLIs of fetch/extract/index/search |
 | FR-25, 26 | bot.py logging, `/stats` |
 | NFR-1, 2 | Gemini free-tier Flash model, max_iterations=8, compact tool output |
 | NFR-3 | extract batching (`EXTRACT_BATCH`/call), embed batching (128) |
-| NFR-4 | in-memory history, log stores question text only |
+| NFR-4 | in-memory history, log stores question text only; `languages.json` holds only chat id → language code |
 | NFR-5 | systemd `Restart=always` |
 | NFR-6 | `.env`, `data/` and `session/` gitignored |
 | NFR-7 | one module per stage, each with `__main__` |
@@ -224,4 +234,5 @@ shop_assistant/                   # repo root; run everything from here
 | 0.9 | 2026-09-23 | #23 live results: two models — `GEMINI_MODEL = gemini-3.5-flash-lite` for the agent (15 req/min free, 0.8 s, 10/10 tool calls; flash models allow only 5 req/min), `GEMINI_EXTRACT_MODEL = gemini-3.5-flash` for extraction (fewer mis-categorised items than lite); `EXTRACT_BATCH = 20` (5/10/20 all valid); price regex needs one separator per number ("630.000 399.000" is two prices); eval 19/20, 0 invented, median 2.5 s |
 | 0.7 | 2026-09-23 | #17: owner `/stats` (indexed posts, last index, questions/escalations today, `Gemini: N / GEMINI_DAILY_LIMIT today` from `log.jsonl` + `gemini_ingest.jsonl`) and `/reindex` (`search.reload()`); §2.6 `log.jsonl` gains `llm_calls`; `run()` dispatches through `bot.route` |
 | 1.0 | 2026-09-23 | #23.5: embeddings on the Gemini API (`gemini-embedding-001`, 768-d, `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY` task types, L2-normalised, batches ≤ 100); `embeddings_meta.json` + load guard against mixed models; query path fails fast (empty + WARNING), index CLI retries; tools are plain definitions (no Anthropic SDK); Ollama and `bge-m3` gone; §1, §1.1, §2.3, §3.3, §3.5, §3.6, §3.9, D-3, §7 updated |
+| 1.1 | 2026-09-23 | SRS v0.5 FR-13a (#24): new `lang.py` (§3.8a: language detection, per-chat store, `TEXTS`), `data/languages.json` (§2.7), `config.LANGUAGES_PATH`; §3.7 explicit "Answer in …" line + `run_agent(lang=)`; §3.8 `/start` greeting without LLM, localized carousel/escalation/error texts |
 | 0.4 | 2026-09-17 | SRS C-2 v0.4: Claude + Voyage replaced by Ollama on the GPU server (`gemma4:31b`, `bge-m3`); §1.1, §3.2, §3.3, §3.7, §3.9, §7 updated; deploy target = the GPU server |
