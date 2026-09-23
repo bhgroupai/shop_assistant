@@ -22,6 +22,7 @@ EMBED_BATCH = 128          # NFR-3
 GEMINI_MODEL = "gemini-2.5-flash"
 MAX_ITERATIONS = 8               # model requests per customer turn
 EMBED_MODEL = "bge-m3"           # Ollama, multilingual embeddings, 1024-d — until #23.5
+GEMINI_DAILY_LIMIT = 250        # free-tier requests/day shown by /stats (#17); TODO(#23): set from AI Studio
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
 ROOT = Path(__file__).resolve().parent.parent
