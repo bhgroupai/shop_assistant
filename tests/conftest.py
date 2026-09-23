@@ -70,3 +70,76 @@ def products() -> list[Product]:
                 keywords=("kurtka", "kurtka", "jacket", "qishki kurtka"),
                 season="qish", body="Qishki kurtka Rang qora kok Razmer L XL"),   # > 60 days → stale
     ]
+
+
+# ---- ticket #25: a catalog big enough to page through (23 size-42 shoes, as in the live bug)
+
+_SHOE_MODELS = [
+    ("Krossovka Nike Air Max 90", ("krossovka", "nike", "sneakers")),
+    ("Krossovka Adidas Samba", ("krossovka", "adidas", "sneakers")),
+    ("Krossovka New Balance 574", ("krossovka", "new balance", "sneakers")),
+    ("Krossovka Puma Suede", ("krossovka", "puma", "sneakers")),
+    ("Krossovka Asics Gel-Lyte", ("krossovka", "asics", "sneakers")),
+    ("Krossovka Nike Air Force 1", ("krossovka", "nike", "air force")),
+    ("Krossovka Adidas Superstar", ("krossovka", "adidas", "superstar")),
+    ("Krossovka Reebok Classic", ("krossovka", "reebok", "sneakers")),
+    ("Kedi Converse Chuck 70", ("kedi", "converse", "kedy")),
+    ("Kedi Vans Old Skool", ("kedi", "vans", "kedy")),
+    ("Tufli klassik charm", ("tufli", "klassik", "charm tufli")),
+    ("Botinka Timberland", ("botinka", "timberland", "boots")),
+    ("Botinka Dr. Martens 1460", ("botinka", "dr martens", "boots")),
+    ("Mokasin charm", ("mokasin", "charm", "loafers")),
+    ("Krossovka Nike Dunk Low", ("krossovka", "nike", "dunk")),
+    ("Krossovka Adidas Gazelle", ("krossovka", "adidas", "gazelle")),
+    ("Krossovka Salomon XT-6", ("krossovka", "salomon", "sneakers")),
+    ("Krossovka On Cloud 5", ("krossovka", "on cloud", "running")),
+    ("Krossovka Hoka Clifton 9", ("krossovka", "hoka", "running")),
+    ("Krossovka Skechers Go Walk", ("krossovka", "skechers", "walking")),
+    ("Kedi Nike Blazer Mid", ("kedi", "nike", "blazer")),
+    ("Botinka qishki mo'ynali", ("botinka", "qishki", "winter boots")),
+    ("Krossovka Jordan 1 Low", ("krossovka", "jordan", "nike")),
+]
+
+
+@pytest.fixture
+def shoe_catalog() -> list[Product]:
+    """35 sellable products + 1 announcement. 23 shoes (poyabzal) carry size 42, one post per day
+    2026-08-01 … 2026-08-23 (id 2001 … 2023, so newest first = 2023, 2022, …); prices 250 000 … 910 000
+    (step 30 000), two of them without a price (ids 2004 and 2017). 6 more shoes without size 42,
+    5 clothes, 1 accessory, 1 `boshqa` announcement (never shown)."""
+    out: list[Product] = []
+    for i, (name, kws) in enumerate(_SHOE_MODELS, start=1):
+        pid = 2000 + i
+        price = None if pid in (2004, 2017) else 250000 + 30000 * (i - 1)
+        sizes = ("40", "41", "42", "43") if i % 2 else ("41", "42", "43", "44")
+        out.append(Product(id=pid, date=f"2026-08-{i:02d}", link=f"https://t.me/example_shop/{pid}",
+                           name=name, category="poyabzal", price=price, subscriber_price=None,
+                           sizes=sizes, colors=("qora",) if i % 3 == 0 else ("oq",),
+                           keywords=kws, body=f"{name} Razmer {' '.join(sizes)}"))
+    for j, (name, sizes) in enumerate([("Krossovka bolalar Nike", ("31", "32", "33")),
+                                       ("Krossovka ayollar Adidas", ("36", "37", "38")),
+                                       ("Tufli ayollar", ("36", "37")),
+                                       ("Botinka Timberland 44", ("44", "45")),
+                                       ("Shippak Adidas Adilette", ("39", "40", "41")),
+                                       ("Krossovka Puma RS-X", ("43", "44"))], start=1):
+        pid = 2100 + j
+        out.append(Product(id=pid, date=f"2026-09-{j:02d}", link=f"https://t.me/example_shop/{pid}",
+                           name=name, category="poyabzal", price=300000 + 10000 * j, subscriber_price=None,
+                           sizes=sizes, colors=(), keywords=("krossovka",) if "Krossovka" in name else ("oyoq kiyim",),
+                           body=f"{name} Razmer {' '.join(sizes)}"))
+    for k, (name, kws) in enumerate([("Dvoyka sport kostyum", ("dvoyka", "sport kostyum")),
+                                     ("Qishki kurtka", ("kurtka", "jacket")),
+                                     ("Futbolka oversize", ("futbolka", "t-shirt")),
+                                     ("Jinsi shim", ("jinsi", "shim", "jeans")),
+                                     ("Xudi Nike", ("xudi", "hoodie"))], start=1):
+        pid = 2200 + k
+        out.append(Product(id=pid, date=f"2026-09-{10 + k:02d}", link=f"https://t.me/example_shop/{pid}",
+                           name=name, category="kiyim", price=200000 + 100000 * k, subscriber_price=None,
+                           sizes=("M", "L", "XL"), colors=("qora",), keywords=kws, body=name))
+    out.append(Product(id=2300, date="2026-09-16", link="https://t.me/example_shop/2300",
+                       name="Ryukzak Nike", category="aksessuar", price=250000, subscriber_price=None,
+                       sizes=(), colors=("qora",), keywords=("ryukzak", "backpack"), body="Ryukzak Nike"))
+    out.append(Product(id=2400, date="2026-09-20", link="https://t.me/example_shop/2400",
+                       name="Boshqa", category="boshqa", price=None, subscriber_price=None,
+                       sizes=(), colors=(), keywords=("yangi kolleksiya",), body="Yangi kolleksiya tez orada"))
+    return out

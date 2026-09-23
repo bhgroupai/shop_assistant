@@ -82,6 +82,8 @@ def tool(func: Callable[..., str]) -> Tool:
 
 NO_RESULTS = "no results"
 NO_FAQ = "no faq entries"
+NO_MORE = "boshqa natija yo'q"
+SEMANTIC_POOL = 20   # semantic_search_tool pages through at most this many ranked candidates (#25)
 ASK_PRICE = "narxi: so'rab beraman"
 OFFER_PRICE = "Narxini bilmoqchi bo'lsangiz raqamini yozing"
 
@@ -97,14 +99,14 @@ def format_product(p: Product) -> str:
     return line.replace("\n", " ")
 
 
-def format_products(products: list[Product]) -> str:
-    """Numbered lines `1. <format_product line>`; price None renders `narxi: so'rab beraman`;
-    empty list → NO_RESULTS. Ends with the offer line
+def format_products(products: list[Product], start: int = 1) -> str:
+    """Numbered lines `<start>. <format_product line>`, `<start+1>. …`; price None renders
+    `narxi: so'rab beraman`; empty list → NO_RESULTS. Ends with the offer line
     `Narxini bilmoqchi bo'lsangiz raqamini yozing` only when at least one item has no price."""
     if not products:
         return NO_RESULTS
     lines = []
-    for i, p in enumerate(products, start=1):
+    for i, p in enumerate(products, start=start):
         line = format_product(p)
         if p.price is None:
             line = line.replace("narx: so'rang", ASK_PRICE, 1)
@@ -112,6 +114,29 @@ def format_products(products: list[Product]) -> str:
     if any(p.price is None for p in products):
         lines.append(OFFER_PRICE)
     return "\n".join(lines)
+
+
+def _offset(offset) -> int:
+    """The model's `offset` as a non-negative int: None / negative → 0, 5.0 → 5 (#25)."""
+    try:
+        return max(0, int(offset or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _page(matches: list[Product], offset, page_size: int) -> str:
+    """One page of `matches` (#25, SDD §3.6): numbered from offset+1, then the range/total line
+    `ko'rsatildi 6–10, jami 23; keyingilari: shu filtrlar bilan offset=10` (`; boshqa yo'q` on the last page).
+    No match → NO_RESULTS; offset past the end → `boshqa natija yo'q (jami N, offset=K)`."""
+    if not matches:
+        return NO_RESULTS
+    offset, total = _offset(offset), len(matches)
+    if offset >= total:
+        return f"{NO_MORE} (jami {total}, offset={offset})"
+    shown = matches[offset:offset + page_size]
+    first, last = offset + 1, offset + len(shown)
+    tail = f"; keyingilari: shu filtrlar bilan offset={last}" if last < total else "; boshqa yo'q"
+    return f"{format_products(shown, start=first)}\nko'rsatildi {first}–{last}, jami {total}{tail}"
 
 
 def _format_faq(entry: FaqEntry, owner_said: str) -> str:
@@ -129,11 +154,14 @@ def _chat_lang() -> str:
 @tool
 def find_products_tool(category: str | None = None, min_price: int | None = None,
                        max_price: int | None = None, size: str | None = None,
-                       color: str | None = None, keywords: list[str] | None = None) -> str:
+                       color: str | None = None, keywords: list[str] | None = None,
+                       offset: int = 0) -> str:
     """Filter the shop catalog. All given filters are ANDed; newest posts first.
-    Returns one numbered product per line: N. name · price · sizes · date · link (· [eskirgan] if the
-    post is old), or "no results". Items without a price show "narxi: so'rab beraman"; then a final
-    offer line tells the customer to write the item number to ask for its price.
+    Returns at most 5 numbered products per call: N. name · price · sizes · date · link (· [eskirgan] if
+    the post is old), or "no results". Items without a price show "narxi: so'rab beraman"; then an offer
+    line tells the customer to write the item number to ask for its price. The last line gives the shown
+    range and the total, e.g. "ko'rsatildi 1–5, jami 23; keyingilari: shu filtrlar bilan offset=5"; to
+    show more, call again with the same filters and that offset.
 
     Args:
         category: One of: kiyim (clothes), poyabzal (shoes), aksessuar (accessories), boshqa (other).
@@ -143,37 +171,41 @@ def find_products_tool(category: str | None = None, min_price: int | None = None
         color: Color name in Uzbek, e.g. "qora", "oq", "kok".
         keywords: Product keywords in any language or script (uz Latin, uz Cyrillic, ru, en),
             e.g. ["krossovka"], ["кроссовки"], ["kurtka", "jacket"].
+        offset: How many matching products to skip (0 = from the first). To show the next ones, use the offset given in the last line of the previous result.
     """
-    products = search.find_products(category=category, min_price=min_price, max_price=max_price,
-                                    size=size, color=color, keywords=keywords,
-                                    limit=config.MAX_RESULTS)
-    return format_products(products)
+    matches = search.find_products(category=category, min_price=min_price, max_price=max_price,
+                                   size=size, color=color, keywords=keywords, limit=None)
+    return _page(matches, offset, config.MAX_RESULTS)
 
 
 @tool
-def semantic_search_tool(text: str, max_price: int | None = None) -> str:
+def semantic_search_tool(text: str, max_price: int | None = None, offset: int = 0) -> str:
     """Meaning-based search over the catalog for descriptive questions when find_products_tool
     returned "no results" (e.g. "something warm for winter", "подарок для мамы").
-    Returns one product per line (same format as find_products_tool) or "no results".
+    Returns one product per line (same format as find_products_tool, including the last range/total
+    line; at most the 20 closest products in total) or "no results".
 
     Args:
         text: The customer's description of what they want, in any language or script.
         max_price: Maximum price in so'm (UZS).
+        offset: How many matching products to skip (0 = from the first). To show the next ones, use the offset given in the last line of the previous result.
     """
-    products = search.semantic_search(text, max_price=max_price, limit=config.MAX_RESULTS)
-    return format_products(products)
+    ranked = search.semantic_search(text, max_price=max_price, limit=SEMANTIC_POOL)
+    return _page(ranked, offset, config.MAX_RESULTS)
 
 
 @tool
-def latest_posts_tool(n: int = 5) -> str:
+def latest_posts_tool(n: int = 5, offset: int = 0) -> str:
     """The newest posts in the shop channel ("what's new?", "yangi tovarlar bormi?").
-    Returns one product per line (same format as find_products_tool) or "no results".
+    Returns one product per line (same format as find_products_tool, including the last range/total
+    line) or "no results".
 
     Args:
         n: How many latest products to return (1-5).
+        offset: How many matching products to skip (0 = from the first). To show the next ones, use the offset given in the last line of the previous result.
     """
     n = max(1, min(int(n), config.MAX_RESULTS))
-    return format_products(search.latest_posts(n))
+    return _page(search.latest_posts(None), offset, n)
 
 
 @tool
