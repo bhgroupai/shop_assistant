@@ -50,6 +50,7 @@ EMBEDDINGS_IDS_PATH = DATA_DIR / "embeddings_ids.json"
 EMBEDDINGS_META_PATH = DATA_DIR / "embeddings_meta.json"   # {"model", "dim", "n"} of the matrix (#23.5)
 FAQ_PATH = DATA_DIR / "faq.jsonl"
 FAQ_EMBEDDINGS_PATH = DATA_DIR / "faq_embeddings.npy"
+FAQ_META_PATH = DATA_DIR / "faq_embeddings_meta.json"   # {"model", "dim", "n"} of the FAQ matrix (#23.7)
 STATE_PATH = DATA_DIR / "state.json"
 LOG_PATH = DATA_DIR / "log.jsonl"
 LANGUAGES_PATH = DATA_DIR / "languages.json"   # chat id → language code (#24, FR-13a)
