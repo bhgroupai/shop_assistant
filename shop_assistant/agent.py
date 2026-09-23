@@ -95,8 +95,10 @@ def _run_tool(name: str, args: dict) -> str:
     return out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
 
 
-def run_agent(chat_id: int, text: str, history: History | None = None) -> str:
-    """Blocking. Manual Gemini function-calling loop over TOOLS, max_iterations=8. Returns final reply text."""
+def run_agent(chat_id: int, text: str, history: History | None = None, lang: str = "uz_latn") -> str:
+    """Blocking. Manual Gemini function-calling loop over TOOLS, max_iterations=8. Returns final reply text.
+    Ticket #24: `lang` (uz_latn | uz_cyrl | ru, see lang.py) — the system prompt gets one explicit
+    "Answer in ..." line and the fixed phrases the model copies in that language. Not wired yet."""
     global last_run
     h = history or _history
     current_chat_id.set(chat_id)

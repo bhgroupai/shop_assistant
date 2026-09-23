@@ -10,6 +10,13 @@ def _channel(monkeypatch):
     monkeypatch.setattr(config, "CHANNEL", "example_shop")
 
 
+@pytest.fixture(autouse=True)
+def _languages_file(monkeypatch, tmp_path):
+    """Ticket #24: the per-chat language store never touches the real data/languages.json in tests;
+    each test starts with an empty store at its own path."""
+    monkeypatch.setattr(config, "LANGUAGES_PATH", tmp_path / "languages.json", raising=False)
+
+
 FOOTER = "\n\n📍Manzil: Shahar markazi\n📞 +998 00 000 00 00\n@example_shop\n🚚 Dastavka bor"
 
 CAPTION_DVOYKA = (
