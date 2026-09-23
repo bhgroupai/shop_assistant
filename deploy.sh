@@ -26,6 +26,10 @@ fi
 EXCLUDES=(--exclude '__pycache__' --exclude '.git' --exclude '.env' --exclude '.venv' --exclude 'session/')
 if [[ $SYNC_DATA -eq 0 ]]; then
   EXCLUDES+=(--exclude 'data/')
+else
+  # Server-owned files: the live customer log, run logs, backups, eval runs. Excluded paths are also
+  # protected from --delete, so a data sync never wipes them.
+  EXCLUDES+=(--exclude 'data/log.jsonl' --exclude 'data/*.log' --exclude 'data/*.bak*' --exclude 'data/eval_*')
 fi
 
 echo "==> rsync to $HOST:$DEST"
@@ -34,6 +38,7 @@ rsync -az --delete "${EXCLUDES[@]}" ./ "$HOST:$DEST/"
 echo "==> install deps + (re)start service on $HOST"
 ssh "$HOST" bash -s <<REMOTE
 set -euo pipefail
+export PATH="\$HOME/.local/bin:\$PATH"   # uv is not on the non-interactive ssh PATH
 cd $DEST
 uv venv -q --allow-existing
 uv pip install -q -r requirements.txt
