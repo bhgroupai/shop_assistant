@@ -139,6 +139,15 @@ def _page(matches: list[Product], offset, page_size: int) -> str:
     return f"{format_products(shown, start=first)}\nko'rsatildi {first}–{last}, jami {total}{tail}"
 
 
+# #27: the model-only lines _page writes (range/total, past-the-end), also retyped by the model with extra
+# spaces, "-" for "–" or the ‘ / ’ apostrophe. bot.strip_tool_lines drops whole lines matching it.
+_APOS = "['‘’ʻʼ`]"
+TOOL_LINE_RE = re.compile(
+    rf"^\s*(?:ko{_APOS}rsatildi\s+\d+\s*[–—-]\s*\d+\s*,\s*jami\s+\d+\s*;\s*"
+    rf"(?:keyingilari:.*offset\s*=\s*\d+|boshqa\s+yo{_APOS}q)"
+    rf"|boshqa\s+natija\s+yo{_APOS}q\s*\(\s*jami\s+\d+\s*,\s*offset\s*=\s*\d+\s*\))\s*$")
+
+
 def _format_faq(entry: FaqEntry, owner_said: str) -> str:
     """One line `<question> — <owner_said>: <answer>` (#23.7): an owner's words, never product data."""
     return f"{entry.question} — {owner_said}: {entry.answer}".replace("\n", " ")
