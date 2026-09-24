@@ -13,9 +13,16 @@ import time
 from pathlib import Path
 
 _LINK_RE = re.compile(r"t\.me/[A-Za-z0-9_]+/(\d+)")
-_PRICE_RE = re.compile(r"\d{1,3}(?:[ .]\d{3})+|\d{4,}")           # 350 000 · 350.000 · 350000
+_PRICE_RE = re.compile(r"\d{1,3}(?:[ .,]\d{3})+|\d{4,}")          # 350 000 · 350.000 · 350,000 · 350000
 _SIZE_RE = re.compile(r"(?<![\w.])\d{1,2}(?![\w.])")                # standalone 1–2 digits; "2XL" is skipped
 _NOISE_RE = re.compile(r"https?://\S+|\bt\.me/\S+|\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4}")   # links and dates (ISO or DD.MM.YYYY) are not prices/sizes
+# Item numbers ("6. Poyabzal …") and the match total the bot now states ("Jami 23 ta", "Всего найдено 22")
+# come from the listing tools' paging (#25); they are not prices or sizes.
+_PAGING_RE = re.compile(
+    r"(?m)^\s*\d+\.\s"                                                         # item number
+    r"|(?i:\b(?:jami|жами|всего(?:\s+найдено)?|итого|qolgan|қолган|осталось|ещё)\s+\d+)"   # totals / remaining
+    r"|ko'rsatildi\s+\d+\s*[–-]\s*\d+")                                        # the tool's own range line
+
 
 
 def load_questions(path) -> list[dict]:
@@ -24,8 +31,8 @@ def load_questions(path) -> list[dict]:
 
 
 def _candidate_numbers(answer: str) -> set[int]:
-    answer = _NOISE_RE.sub(" ", answer)
-    prices = {int(re.sub(r"[ .]", "", m)) for m in _PRICE_RE.findall(answer)}
+    answer = _PAGING_RE.sub(" ", _NOISE_RE.sub(" ", answer))
+    prices = {int(re.sub(r"[ .,]", "", m)) for m in _PRICE_RE.findall(answer)}
     rest = _PRICE_RE.sub(" ", answer)
     sizes = {int(m) for m in _SIZE_RE.findall(rest)}
     return {p for p in prices if p >= 1000} | sizes
