@@ -86,6 +86,17 @@ def post_ids_in(text: str) -> list[int]:
     return ids
 
 
+def strip_tool_lines(text: str | None) -> str:
+    """Ticket #27: `text` without the listing tools' model-only lines (#25) — whole lines that are the
+    range/total line (`ko'rsatildi 1–5, jami 23; keyingilari: shu filtrlar bilan offset=5`,
+    `ko'rsatildi 21–23, jami 23; boshqa yo'q`) or the past-the-end line
+    (`boshqa natija yo'q (jami 23, offset=30)`). The pattern lives next to the formatter in tools.py.
+    Everything else is kept as is: product lines, the offer line, the model's own sentences (also
+    "Jami 23 ta ..." / "Всего найдено ..."). Blank lines left behind are collapsed; None / "" → "".
+    Applied by handle_customer to every customer reply (plain text and carousel)."""
+    raise NotImplementedError("ticket #27")
+
+
 
 # ---------------------------------------------------------------- owner commands (ticket #17)
 
