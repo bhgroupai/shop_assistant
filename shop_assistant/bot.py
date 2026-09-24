@@ -9,6 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from shop_assistant import config, lang
+from shop_assistant.tools import TOOL_LINE_RE
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +85,28 @@ def post_ids_in(text: str) -> list[int]:
             if len(ids) == MAX_FORWARD:
                 break
     return ids
+
+
+def strip_tool_lines(text: str | None) -> str:
+    """Ticket #27: `text` without the listing tools' model-only lines (#25) — whole lines that are the
+    range/total line (`ko'rsatildi 1–5, jami 23; keyingilari: shu filtrlar bilan offset=5`,
+    `ko'rsatildi 21–23, jami 23; boshqa yo'q`) or the past-the-end line
+    (`boshqa natija yo'q (jami 23, offset=30)`). The pattern lives next to the formatter in tools.py.
+    Everything else is kept as is: product lines, the offer line, the model's own sentences (also
+    "Jami 23 ta ..." / "Всего найдено ..."). Blank lines left behind are collapsed; None / "" → "".
+    Applied by handle_customer to every customer reply (plain text and carousel)."""
+    if not text:
+        return ""
+    out: list[str] = []
+    for line in text.split("\n"):
+        if TOOL_LINE_RE.match(line):
+            continue
+        if not line.strip() and (not out or not out[-1].strip()):
+            continue                          # no leading blank, no run of blanks
+        out.append(line)
+    while out and not out[-1].strip():
+        out.pop()
+    return "\n".join(out)
 
 
 
@@ -506,6 +529,7 @@ async def handle_customer(event) -> None:
             return
         t0 = time.monotonic()
         reply = await asyncio.to_thread(agent.run_agent, event.chat_id, text, lang=code)
+        reply = strip_tool_lines(reply)       # #27: the tools' paging line is for the model only
         ms = int((time.monotonic() - t0) * 1000)
         await send_reply(event, reply, code)
         last = getattr(agent, "last_run", {}) or {}
